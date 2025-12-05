@@ -241,6 +241,13 @@ function initDB() {
         console.log("♻️ Admin paroli 1111 ga qayta tiklandi.");
     }
 
+    // --- YANGI: next_check_number sozlamasini yaratish ---
+    const checkNumberSetting = db.prepare("SELECT value FROM settings WHERE key = 'next_check_number'").get();
+    if (!checkNumberSetting) {
+        db.prepare("INSERT INTO settings (key, value) VALUES ('next_check_number', '1')").run();
+        console.log("✅ 'next_check_number' sozlamasi yaratildi (boshlang'ich qiymat: 1)");
+    }
+
     // Default SMS Shablonlari
     const templateCount = db.prepare('SELECT count(*) as count FROM sms_templates').get().count;
     if (templateCount === 0) {

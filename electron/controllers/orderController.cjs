@@ -2,15 +2,17 @@ const { db, notify } = require('../database.cjs');
 const printerService = require('../services/printerService.cjs');
 const log = require('electron-log');
 
-// Yordamchi: Check raqamini olish
+// Yordamchi: Check raqamini olish (MUSTAHKAMLANGAN)
 function getOrCreateCheckNumber(tableId) {
     const table = db.prepare('SELECT current_check_number FROM tables WHERE id = ?').get(tableId);
     if (table && table.current_check_number > 0) return table.current_check_number;
 
+    // next_check_number qiymatini olish
     const nextNumObj = db.prepare("SELECT value FROM settings WHERE key = 'next_check_number'").get();
     let nextNum = nextNumObj ? parseInt(nextNumObj.value) : 1;
 
-    db.prepare("UPDATE settings SET value = ? WHERE key = 'next_check_number'").run(String(nextNum + 1));
+    // INSERT OR REPLACE yordamida qiymatni kafolatlash va oshirish
+    db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES ('next_check_number', ?)").run(String(nextNum + 1));
     db.prepare("UPDATE tables SET current_check_number = ? WHERE id = ?").run(nextNum, tableId);
 
     return nextNum;

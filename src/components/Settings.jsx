@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Save, Printer, Database, Store, Receipt, Percent, RefreshCw, ChefHat, Plus, Trash2, Users, Shield, Key, Coins, CheckCircle, PcCase } from 'lucide-react';
+import { Save, Printer, Database, Store, Receipt, Percent, RefreshCw, ChefHat, Plus, Trash2, Users, Shield, Key, Coins, CheckCircle, PcCase, MessageSquare } from 'lucide-react';
 import ConfirmModal from './ConfirmModal';
 
 const Settings = () => {
@@ -8,9 +8,8 @@ const Settings = () => {
   const [kitchens, setKitchens] = useState([]);
   const [users, setUsers] = useState([]); 
   const [notification, setNotification] = useState(null);
-  const [systemPrinters, setSystemPrinters] = useState([]); // Tizimdagi printerlar ro'yxati
+  const [systemPrinters, setSystemPrinters] = useState([]); 
   
-  // Yangi oshxona (printer_ip endi printer nomini bildiradi)
   const [newKitchen, setNewKitchen] = useState({ name: '', printer_ip: '' });
   const [newUser, setNewUser] = useState({ name: '', pin: '', role: 'waiter' }); 
 
@@ -19,7 +18,8 @@ const Settings = () => {
   const [settings, setSettings] = useState({
     restaurantName: "", address: "", phone: "", wifiPassword: "",
     serviceChargeType: "percent", serviceChargeValue: 0, receiptFooter: "", 
-    printerReceiptIP: "" // Kassa printeri nomi
+    printerReceiptIP: "",
+    eskiz_email: "", eskiz_password: "", eskiz_nickname: "4546" // YANGI
   });
 
   useEffect(() => {
@@ -52,7 +52,6 @@ const Settings = () => {
         const uData = await ipcRenderer.invoke('get-users');
         setUsers(uData);
 
-        // Printerlarni yuklash
         const printers = await ipcRenderer.invoke('get-system-printers');
         setSystemPrinters(printers || []);
      } catch (err) { console.error(err); }
@@ -66,7 +65,6 @@ const Settings = () => {
   const handleSaveSettings = async () => {
     setLoading(true);
     try {
-        // Kassa printeri uchun majburiy 'driver' turi va port 0
         const settingsToSave = {
             ...settings,
             printerReceiptPort: 0, 
@@ -82,14 +80,12 @@ const Settings = () => {
     e.preventDefault();
     if(!newKitchen.name) return;
     try {
-       // Oshxona uchun ham majburiy 'driver' rejimi
        const kitchenToSave = {
            ...newKitchen,
            printer_port: 0,
            printer_type: 'driver'
        };
        await window.electron.ipcRenderer.invoke('save-kitchen', kitchenToSave);
-       
        setNewKitchen({ name: '', printer_ip: '' }); 
        loadAllData(); 
        showNotify('success', "Oshxona qo'shildi");
@@ -167,6 +163,7 @@ const Settings = () => {
           <button onClick={() => setActiveTab('order')} className={`w-full text-left px-4 py-3 rounded-xl font-medium flex items-center gap-3 transition-colors ${activeTab === 'order' ? 'bg-blue-50 text-blue-600' : 'text-gray-600 hover:bg-gray-50'}`}><Percent size={20} /> Buyurtma va Xizmat</button>
           <button onClick={() => setActiveTab('kitchens')} className={`w-full text-left px-4 py-3 rounded-xl font-medium flex items-center gap-3 transition-colors ${activeTab === 'kitchens' ? 'bg-blue-50 text-blue-600' : 'text-gray-600 hover:bg-gray-50'}`}><ChefHat size={20} /> Oshxonalar & Printer</button>
           <button onClick={() => setActiveTab('printers')} className={`w-full text-left px-4 py-3 rounded-xl font-medium flex items-center gap-3 transition-colors ${activeTab === 'printers' ? 'bg-blue-50 text-blue-600' : 'text-gray-600 hover:bg-gray-50'}`}><Printer size={20} /> Kassa Printeri</button>
+          <button onClick={() => setActiveTab('sms')} className={`w-full text-left px-4 py-3 rounded-xl font-medium flex items-center gap-3 transition-colors ${activeTab === 'sms' ? 'bg-blue-50 text-blue-600' : 'text-gray-600 hover:bg-gray-50'}`}><MessageSquare size={20} /> SMS Sozlamalari</button>
           <button onClick={() => setActiveTab('database')} className={`w-full text-left px-4 py-3 rounded-xl font-medium flex items-center gap-3 transition-colors ${activeTab === 'database' ? 'bg-blue-50 text-blue-600' : 'text-gray-600 hover:bg-gray-50'}`}><Database size={20} /> Baza va Tizim</button>
         </div>
         <div className="mt-auto">
@@ -342,6 +339,32 @@ const Settings = () => {
                             <option key={p.name} value={p.name}>{p.name}</option>
                         ))}
                     </select>
+                </div>
+             </div>
+          </div>
+        )}
+
+        {/* --- SMS SETTINGS (YANGI) --- */}
+        {activeTab === 'sms' && (
+          <div className="max-w-2xl space-y-6">
+             <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100">
+                <h3 className="text-lg font-bold text-gray-800 mb-4 flex items-center gap-2"><MessageSquare size={20} className="text-blue-500"/> Eskiz.uz Sozlamalari</h3>
+                <p className="text-sm text-gray-400 mb-6">SMS xabarnomalar uchun Eskiz.uz ma'lumotlarini kiriting.</p>
+                
+                <div className="space-y-4">
+                    <div>
+                        <label className="block text-sm font-bold text-gray-500 mb-1">Email</label>
+                        <input type="email" name="eskiz_email" value={settings.eskiz_email || ''} onChange={handleChange} className="w-full p-3 bg-gray-50 rounded-xl border border-gray-200 outline-none focus:border-blue-500" />
+                    </div>
+                    <div>
+                        <label className="block text-sm font-bold text-gray-500 mb-1">Parol</label>
+                        <input type="password" name="eskiz_password" value={settings.eskiz_password || ''} onChange={handleChange} className="w-full p-3 bg-gray-50 rounded-xl border border-gray-200 outline-none focus:border-blue-500" />
+                    </div>
+                    <div>
+                        <label className="block text-sm font-bold text-gray-500 mb-1">Nickname (From)</label>
+                        <input type="text" name="eskiz_nickname" value={settings.eskiz_nickname || '4546'} onChange={handleChange} placeholder="4546" className="w-full p-3 bg-gray-50 rounded-xl border border-gray-200 outline-none focus:border-blue-500" />
+                        <p className="text-xs text-gray-400 mt-1">Eskiz.uz da tasdiqlangan nikni yozing (masalan: MYBRAND). Default: 4546</p>
+                    </div>
                 </div>
              </div>
           </div>

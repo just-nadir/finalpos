@@ -5,14 +5,13 @@ const log = require('electron-log');
 
 let token = null;
 
-// Sozlamalardan login/parolni olish
 const getCredentials = () => {
     const email = db.prepare("SELECT value FROM settings WHERE key = 'eskiz_email'").get()?.value;
     const password = db.prepare("SELECT value FROM settings WHERE key = 'eskiz_password'").get()?.value;
-    return { email, password };
+    const nickname = db.prepare("SELECT value FROM settings WHERE key = 'eskiz_nickname'").get()?.value || '4546';
+    return { email, password, nickname };
 };
 
-// Eskizga Login qilish va Token olish
 const loginToEskiz = async () => {
     const { email, password } = getCredentials();
     if (!email || !password) {
@@ -40,19 +39,26 @@ const loginToEskiz = async () => {
     }
 };
 
-// SMS yuborish
 const sendSMS = async (phone, message, type = 'manual') => {
+    // --- TUZATISH: Telefon raqam va Nickname ---
+    let cleanPhone = phone.replace(/\D/g, '');
+    if (cleanPhone.length === 9) cleanPhone = '998' + cleanPhone;
+    
+    if (cleanPhone.length !== 12) {
+        log.warn(`Noto'g'ri raqam formati: ${phone}`);
+        return { success: false, error: "Raqam formati xato" };
+    }
+
+    const { nickname } = getCredentials();
+
     if (!token) await loginToEskiz();
     if (!token) return { success: false, error: "Avtorizatsiya yo'q" };
-
-    // Telefon raqamni tozalash (+998...)
-    const cleanPhone = phone.replace(/\D/g, ''); 
 
     try {
         const formData = new FormData();
         formData.append('mobile_phone', cleanPhone);
         formData.append('message', message);
-        formData.append('from', '4546'); // Yoki o'z nikingiz
+        formData.append('from', nickname);
 
         const response = await axios.post('https://notify.eskiz.uz/api/message/sms/send', formData, {
             headers: {
@@ -61,22 +67,19 @@ const sendSMS = async (phone, message, type = 'manual') => {
             }
         });
 
-        // Logga yozish
         const status = 'sent';
-        db.prepare("INSERT INTO sms_logs (phone, message, status, date, type) VALUES (?, ?, ?, datetime('now', 'localtime'), ?)").run(phone, message, status, type);
+        db.prepare("INSERT INTO sms_logs (phone, message, status, date, type) VALUES (?, ?, ?, datetime('now', 'localtime'), ?)").run(cleanPhone, message, status, type);
         
         return { success: true, data: response.data };
 
     } catch (error) {
         const status = 'failed';
-        db.prepare("INSERT INTO sms_logs (phone, message, status, date, type) VALUES (?, ?, ?, datetime('now', 'localtime'), ?)").run(phone, message, status, type);
+        db.prepare("INSERT INTO sms_logs (phone, message, status, date, type) VALUES (?, ?, ?, datetime('now', 'localtime'), ?)").run(cleanPhone, message, status, type);
         
         log.error("SMS Yuborish Xatosi:", error.response?.data || error.message);
         
-        // Agar token eskirgan bo'lsa, qayta urinib ko'rish (bir marta)
         if (error.response?.status === 401) {
             token = null;
-            // Rekursiya ehtiyotkorlik bilan
             return { success: false, error: "Token expired" };
         }
         

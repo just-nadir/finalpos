@@ -7,24 +7,24 @@ const Marketing = () => {
   const [activeTab, setActiveTab] = useState('templates');
   const [templates, setTemplates] = useState([]);
   const [logs, setLogs] = useState([]);
-  const [settings, setSettings] = useState({ eskiz_email: '', eskiz_password: '' });
+  const [settings, setSettings] = useState({ eskiz_email: '', eskiz_password: '', eskiz_nickname: '' });
   const [bulkMessage, setBulkMessage] = useState('');
   const [loading, setLoading] = useState(false);
 
-  // Ma'lumotlarni yuklash
   useEffect(() => {
     loadData();
   }, [activeTab]);
 
   const loadData = async () => {
-    // --- TUZATILDI: window.api o'rniga window.electron.ipcRenderer ishlatildi ---
     if (!window.electron) return;
     const { ipcRenderer } = window.electron;
 
     try {
       if (activeTab === 'templates') {
         const data = await ipcRenderer.invoke('get-sms-templates');
-        setTemplates(data || []);
+        // "new_menu" shablonini filtrlab tashlaymiz, faqat keraklilarini qoldiramiz
+        const filtered = (data || []).filter(t => t.type !== 'new_menu');
+        setTemplates(filtered);
       } else if (activeTab === 'history') {
         const data = await ipcRenderer.invoke('get-sms-logs');
         setLogs(data || []);
@@ -32,7 +32,8 @@ const Marketing = () => {
         const data = await ipcRenderer.invoke('get-settings');
         setSettings({
           eskiz_email: data.eskiz_email || '',
-          eskiz_password: data.eskiz_password || ''
+          eskiz_password: data.eskiz_password || '',
+          eskiz_nickname: data.eskiz_nickname || ''
         });
       }
     } catch (error) {
@@ -44,9 +45,10 @@ const Marketing = () => {
   const handleSaveTemplate = async (template) => {
     if (!window.electron) return;
     try {
-      await window.electron.ipcRenderer.invoke('save-sms-template', template);
+      // is_active ni doim 1 deb yuboramiz (chunki UI dan o'chirib tashladik)
+      await window.electron.ipcRenderer.invoke('save-sms-template', { ...template, is_active: 1 });
       showToast('success', 'Shablon saqlandi');
-      loadData(); // Yangilash
+      loadData();
     } catch (error) {
       console.error(error);
       showToast('error', 'Xatolik yuz berdi');
@@ -105,21 +107,13 @@ const Marketing = () => {
         {/* SHABLONLAR */}
         {activeTab === 'templates' && (
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-            {templates.length === 0 && <p className="text-gray-400 col-span-2 text-center">Shablonlar yuklanmoqda yoki mavjud emas...</p>}
+            {templates.length === 0 && <p className="text-gray-400 col-span-2 text-center">Shablonlar yuklanmoqda...</p>}
             
             {templates.map(t => (
               <div key={t.type} className="bg-white p-6 rounded-xl shadow-sm border">
                 <div className="flex justify-between items-center mb-4">
                   <h3 className="font-bold text-lg text-gray-700">{t.title}</h3>
-                  <div className="flex items-center gap-2">
-                    <span className="text-sm text-gray-500">Avto-yuborish:</span>
-                    <input 
-                      type="checkbox" 
-                      checked={!!t.is_active} 
-                      onChange={(e) => handleSaveTemplate({...t, is_active: e.target.checked})}
-                      className="w-5 h-5 accent-blue-600 cursor-pointer"
-                    />
-                  </div>
+                  {/* Checkbox olib tashlandi, endi faqat nom va matn */}
                 </div>
                 <textarea 
                   className="w-full p-3 border rounded-lg h-32 text-sm focus:ring-2 focus:ring-blue-500 outline-none resize-none"
@@ -130,7 +124,9 @@ const Marketing = () => {
                   }}
                 />
                 <div className="mt-3 flex justify-between items-center">
-                  <span className="text-xs text-gray-400">O'zgaruvchilar: {'{name}'}, {'{amount}'}</span>
+                  <span className="text-xs text-gray-400">
+                    O'zgaruvchilar: {t.type === 'debt_reminder' ? '{name}, {amount}' : '{name}'}
+                  </span>
                   <button 
                     onClick={() => handleSaveTemplate(templates.find(temp => temp.type === t.type))}
                     className="flex items-center gap-2 bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 transition-colors"
@@ -237,6 +233,16 @@ const Marketing = () => {
                   className="w-full p-3 border rounded-lg outline-none focus:border-blue-500"
                 />
               </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Nickname (From)</label>
+                <input 
+                  type="text" 
+                  value={settings.eskiz_nickname}
+                  onChange={(e) => setSettings({...settings, eskiz_nickname: e.target.value})}
+                  className="w-full p-3 border rounded-lg outline-none focus:border-blue-500"
+                  placeholder="4546"
+                />
+              </div>
               
               <button 
                 onClick={handleSaveSettings}
@@ -244,10 +250,6 @@ const Marketing = () => {
               >
                 Saqlash va Ulash
               </button>
-            </div>
-            
-            <div className="mt-6 text-xs text-gray-400 text-center">
-              Eskiz.uz hisobingiz bo'lishi va SMS paketi faollashgan bo'lishi kerak.
             </div>
           </div>
         )}

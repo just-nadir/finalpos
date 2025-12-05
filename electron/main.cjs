@@ -3,8 +3,8 @@ const path = require('path');
 const log = require('electron-log');
 const { initDB, onChange } = require('./database.cjs'); 
 const startServer = require('./server.cjs');
-const initScheduler = require('./services/scheduler.cjs');
-const registerIpcHandlers = require('./ipcHandlers.cjs'); // YANGI: Handlerlarni chaqiramiz
+const initScheduler = require('./services/scheduler.cjs'); // YANGI
+const registerIpcHandlers = require('./ipcHandlers.cjs'); // YANGI
 
 // --- LOGGER SOZLAMALARI ---
 log.transports.file.level = 'info';
@@ -20,24 +20,20 @@ process.on('unhandledRejection', (reason) => {
 });
 
 app.disableHardwareAcceleration();
-
 function createWindow() {
   try {
     initDB();
     startServer();
-    initScheduler();
-    
-    // YANGI: Barcha IPC handlerlarni ro'yxatdan o'tkazish
-    registerIpcHandlers(ipcMain);
-    
-    // Printerlarni olish (BrowserWindow kerak bo'lgani uchun shu yerda qoldi)
+    initScheduler(); // Scheduler ishga tushirildi
+    registerIpcHandlers(ipcMain); // Handlerlar ro'yxatdan o'tdi
+
+    // Printerlarni olish
     ipcMain.handle('get-system-printers', async () => {
         const wins = BrowserWindow.getAllWindows();
         if (wins.length === 0) return [];
         const printers = await wins[0].webContents.getPrintersAsync();
         return printers;
     });
-
     log.info("Dastur ishga tushdi. Baza, Server va Scheduler yondi.");
   } catch (err) {
     log.error("Boshlang'ich yuklashda xato:", err);
@@ -54,23 +50,20 @@ function createWindow() {
       preload: path.join(__dirname, 'preload.cjs')
     },
   });
-
+  
   onChange((type, id) => {
     if (!win.isDestroyed()) {
       win.webContents.send('db-change', { type, id });
     }
   });
 
-  // --- TUZATILDI: Oq ekran muammosi ---
   if (process.env.VITE_DEV_SERVER_URL) {
     win.loadURL(process.env.VITE_DEV_SERVER_URL);
   } else {
-    // Agar dastur paketlanmagan bo'lsa (ya'ni biz kod yozyapmiz), localhostga ulanamiz
     if (!app.isPackaged) {
         win.loadURL('http://localhost:5173');
         console.log("Development rejimida: http://localhost:5173 yuklanmoqda...");
     } else {
-        // Production rejimida faylni yuklaymiz
         win.loadFile(path.join(__dirname, '../dist/index.html'));
     }
   }

@@ -1,225 +1,237 @@
 import React, { useState, useEffect } from 'react';
-import { Mail, Settings, History, Send, Save, RefreshCw, MessageSquare, CheckCircle, AlertCircle } from 'lucide-react';
+import { Send, Settings, History, FileText, Save, RefreshCw } from 'lucide-react';
+import { useGlobal } from '../context/GlobalContext';
 
 const Marketing = () => {
-  const [activeTab, setActiveTab] = useState('send');
-  const [loading, setLoading] = useState(false);
-  const [toast, setToast] = useState(null);
-
-  // Data States
-  const [settings, setSettings] = useState({ eskiz_email: '', eskiz_password: '' });
+  const { showToast } = useGlobal();
+  const [activeTab, setActiveTab] = useState('templates');
   const [templates, setTemplates] = useState([]);
-  const [history, setHistory] = useState([]);
-  const [newsMessage, setNewsMessage] = useState('');
+  const [logs, setLogs] = useState([]);
+  const [settings, setSettings] = useState({ eskiz_email: '', eskiz_password: '' });
+  const [bulkMessage, setBulkMessage] = useState('');
+  const [loading, setLoading] = useState(false);
 
-  // --- LOADER ---
-  const loadData = async () => {
-    if (!window.electron) return;
-    try {
-      const { ipcRenderer } = window.electron;
-      
-      if (activeTab === 'config') {
-          const s = await ipcRenderer.invoke('sms-get-settings');
-          setSettings(prev => ({ ...prev, eskiz_email: s.email }));
-      }
-      
-      if (activeTab === 'send') {
-          const t = await ipcRenderer.invoke('sms-get-templates');
-          setTemplates(t);
-      }
-
-      if (activeTab === 'history') {
-          const h = await ipcRenderer.invoke('sms-get-history');
-          setHistory(h);
-      }
-
-    } catch (err) { console.error(err); }
-  };
-
-  useEffect(() => { loadData(); }, [activeTab]);
-
+  // Ma'lumotlarni yuklash
   useEffect(() => {
-      if(toast) {
-          const timer = setTimeout(() => setToast(null), 3000);
-          return () => clearTimeout(timer);
-      }
-  }, [toast]);
+    loadData();
+  }, [activeTab]);
 
-  // --- HANDLERS ---
-  const handleSaveSettings = async (e) => {
-      e.preventDefault();
-      setLoading(true);
-      try {
-          await window.electron.ipcRenderer.invoke('sms-save-settings', settings);
-          setToast({ type: 'success', msg: "Sozlamalar saqlandi" });
-          setSettings(p => ({...p, eskiz_password: ''})); // Xavfsizlik
-      } catch (err) { setToast({ type: 'error', msg: "Xatolik" }); }
+  const loadData = async () => {
+    if (activeTab === 'templates') {
+      const data = await window.api.invoke('get-sms-templates');
+      setTemplates(data);
+    } else if (activeTab === 'history') {
+      const data = await window.api.invoke('get-sms-logs');
+      setLogs(data);
+    } else if (activeTab === 'settings') {
+      const data = await window.api.invoke('get-settings');
+      setSettings({
+        eskiz_email: data.eskiz_email || '',
+        eskiz_password: data.eskiz_password || ''
+      });
+    }
+  };
+
+  const handleSaveTemplate = async (template) => {
+    try {
+      await window.api.invoke('save-sms-template', template);
+      showToast('success', 'Shablon saqlandi');
+      loadData();
+    } catch (error) {
+      showToast('error', 'Xatolik yuz berdi');
+    }
+  };
+
+  const handleSaveSettings = async () => {
+    try {
+      await window.api.invoke('save-settings', settings);
+      showToast('success', 'Sozlamalar saqlandi va tizim qayta ulandi');
+    } catch (error) {
+      showToast('error', 'Saqlashda xatolik');
+    }
+  };
+
+  const handleSendBulk = async () => {
+    if (!bulkMessage) return showToast('error', 'Xabar matnini kiriting');
+    
+    setLoading(true);
+    try {
+      const res = await window.api.invoke('send-mass-sms', { message: bulkMessage, filter: 'all' });
+      showToast('success', `${res.count} ta xabar yuborildi`);
+      setBulkMessage('');
+    } catch (e) {
+      showToast('error', 'Yuborishda xatolik');
+    } finally {
       setLoading(false);
+    }
   };
-
-  const handleUpdateTemplate = async (type, text) => {
-      try {
-          await window.electron.ipcRenderer.invoke('sms-update-template', { type, template: text });
-          setToast({ type: 'success', msg: "Shablon yangilandi" });
-      } catch (err) { setToast({ type: 'error', msg: "Xatolik" }); }
-  };
-
-  const handleSendBroadcast = async () => {
-      if (!newsMessage.trim()) return;
-      if (!confirm("Barcha mijozlarga SMS yuborilsinmi? Bu pullik xizmat.")) return;
-      
-      setLoading(true);
-      try {
-          const res = await window.electron.ipcRenderer.invoke('sms-send-broadcast', newsMessage);
-          setToast({ type: 'success', msg: `${res.count} ta xabar yuborildi` });
-          setNewsMessage('');
-      } catch (err) { setToast({ type: 'error', msg: "Xatolik yuz berdi" }); }
-      setLoading(false);
-  };
-
-  // --- RENDERERS ---
-  const renderConfig = () => (
-      <div className="max-w-xl mx-auto bg-white p-8 rounded-2xl shadow-sm border border-gray-100 mt-10">
-          <h2 className="text-xl font-bold text-gray-800 mb-6 flex items-center gap-2">
-              <Settings className="text-blue-600" /> Eskiz.uz Sozlamalari
-          </h2>
-          <form onSubmit={handleSaveSettings} className="space-y-4">
-              <div>
-                  <label className="block text-sm font-bold text-gray-500 mb-1">Email (Login)</label>
-                  <input type="email" value={settings.eskiz_email} onChange={e => setSettings({...settings, eskiz_email: e.target.value})} className="w-full p-3 bg-gray-50 rounded-xl border border-gray-200 outline-none focus:border-blue-500" placeholder="example@mail.uz" />
-              </div>
-              <div>
-                  <label className="block text-sm font-bold text-gray-500 mb-1">Parol</label>
-                  <input type="password" value={settings.eskiz_password} onChange={e => setSettings({...settings, eskiz_password: e.target.value})} className="w-full p-3 bg-gray-50 rounded-xl border border-gray-200 outline-none focus:border-blue-500" placeholder="********" />
-              </div>
-              <button disabled={loading} className="w-full bg-blue-600 text-white py-3 rounded-xl font-bold hover:bg-blue-700 flex items-center justify-center gap-2">
-                  {loading ? <RefreshCw className="animate-spin"/> : <Save size={20}/>} Saqlash
-              </button>
-          </form>
-      </div>
-  );
-
-  const renderSend = () => (
-      <div className="grid grid-cols-2 gap-6 h-full">
-          {/* Shablonlar */}
-          <div className="space-y-4 overflow-y-auto pr-2">
-              <h3 className="font-bold text-gray-700">Avtomatik Shablonlar</h3>
-              {templates.map(t => (
-                  <div key={t.id} className="bg-white p-4 rounded-2xl shadow-sm border border-gray-100">
-                      <div className="flex justify-between items-center mb-2">
-                          <span className="text-xs font-bold uppercase px-2 py-1 rounded bg-gray-100 text-gray-600">
-                              {t.type === 'birthday' ? "Tug'ilgan kun" : t.type === 'debt' ? "Qarz Eslatmasi" : "Yangilik"}
-                          </span>
-                      </div>
-                      <textarea 
-                          defaultValue={t.template} 
-                          onBlur={(e) => handleUpdateTemplate(t.type, e.target.value)}
-                          className="w-full p-3 bg-gray-50 rounded-xl border-none resize-none text-sm focus:ring-2 focus:ring-blue-100 h-24"
-                      ></textarea>
-                      <p className="text-[10px] text-gray-400 mt-1">
-                          {t.type === 'birthday' ? "{name} - mijoz ismi." : 
-                           t.type === 'debt' ? "{name} - ism, {amount} - summa." : 
-                           "{dish_name} - taom nomi."}
-                      </p>
-                  </div>
-              ))}
-          </div>
-
-          {/* Yangilik Yuborish */}
-          <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 h-fit">
-              <h3 className="font-bold text-gray-800 mb-4 flex items-center gap-2">
-                  <Send size={20} className="text-green-500" /> Ommaviy Xabar (Yangilik)
-              </h3>
-              <p className="text-sm text-gray-500 mb-4">Barcha bazadagi mijozlarga SMS yuborish.</p>
-              
-              <textarea 
-                  value={newsMessage}
-                  onChange={(e) => setNewsMessage(e.target.value)}
-                  placeholder="Yangi taomimizni tatib ko'ring..."
-                  className="w-full p-4 bg-gray-50 rounded-xl border border-gray-200 outline-none focus:border-green-500 h-40 mb-4 resize-none"
-              ></textarea>
-              
-              <button onClick={handleSendBroadcast} disabled={loading || !newsMessage} className="w-full bg-green-600 text-white py-3 rounded-xl font-bold hover:bg-green-700 flex items-center justify-center gap-2 disabled:opacity-50">
-                  {loading ? "Yuborilmoqda..." : <><Send size={18} /> Yuborish</>}
-              </button>
-          </div>
-      </div>
-  );
-
-  const renderHistory = () => (
-      <div className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden h-full flex flex-col">
-          <div className="p-4 border-b border-gray-100 flex justify-between items-center">
-              <h3 className="font-bold text-gray-800">So'nggi 100 ta xabar</h3>
-              <button onClick={loadData} className="p-2 bg-gray-100 rounded-lg hover:bg-gray-200"><RefreshCw size={18}/></button>
-          </div>
-          <div className="flex-1 overflow-y-auto p-4">
-              <table className="w-full text-left border-collapse">
-                  <thead className="bg-gray-50 text-gray-500 text-xs uppercase sticky top-0">
-                      <tr>
-                          <th className="p-3 rounded-l-lg">Sana</th>
-                          <th className="p-3">Tel</th>
-                          <th className="p-3">Xabar</th>
-                          <th className="p-3">Tur</th>
-                          <th className="p-3 rounded-r-lg text-right">Status</th>
-                      </tr>
-                  </thead>
-                  <tbody className="text-sm">
-                      {history.map(h => (
-                          <tr key={h.id} className="border-b border-gray-50 last:border-0 hover:bg-blue-50/30 transition-colors">
-                              <td className="p-3 text-gray-500">{new Date(h.date).toLocaleString()}</td>
-                              <td className="p-3 font-mono font-bold text-gray-700">{h.phone}</td>
-                              <td className="p-3 text-gray-600 max-w-xs truncate" title={h.message}>{h.message}</td>
-                              <td className="p-3">
-                                  <span className="px-2 py-1 rounded text-[10px] bg-gray-100 text-gray-600 uppercase font-bold">{h.type}</span>
-                              </td>
-                              <td className="p-3 text-right">
-                                  {h.status === 'sent' 
-                                      ? <span className="text-green-600 font-bold flex items-center justify-end gap-1"><CheckCircle size={14}/> OK</span>
-                                      : <span className="text-red-500 font-bold flex items-center justify-end gap-1"><AlertCircle size={14}/> Xato</span>}
-                              </td>
-                          </tr>
-                      ))}
-                  </tbody>
-              </table>
-              {history.length === 0 && <div className="text-center py-10 text-gray-400">Tarix bo'sh</div>}
-          </div>
-      </div>
-  );
 
   return (
-    <div className="flex w-full h-full bg-gray-100 font-sans">
-      {/* Toast */}
-      {toast && (
-        <div className={`absolute top-6 right-6 z-50 px-6 py-3 rounded-xl shadow-2xl text-white font-bold flex items-center gap-3 animate-in slide-in-from-top ${toast.type === 'success' ? 'bg-green-500' : 'bg-red-500'}`}>
-           {toast.type === 'success' ? <CheckCircle size={20}/> : <AlertCircle size={20}/>} {toast.msg}
-        </div>
-      )}
-
-      {/* Sidebar */}
-      <div className="w-64 bg-white border-r border-gray-200 flex flex-col p-4 z-10 shadow-sm">
-        <h2 className="text-xl font-black text-gray-800 mb-6 px-2 flex items-center gap-2">
-            <MessageSquare className="text-blue-600" /> SMS Marketing
-        </h2>
-        <div className="space-y-2">
-            <button onClick={() => setActiveTab('send')} className={`w-full text-left px-4 py-3 rounded-xl font-medium flex items-center gap-3 transition-colors ${activeTab === 'send' ? 'bg-blue-50 text-blue-600' : 'text-gray-600 hover:bg-gray-50'}`}>
-                <Send size={18} /> Yuborish & Shablon
-            </button>
-            <button onClick={() => setActiveTab('history')} className={`w-full text-left px-4 py-3 rounded-xl font-medium flex items-center gap-3 transition-colors ${activeTab === 'history' ? 'bg-blue-50 text-blue-600' : 'text-gray-600 hover:bg-gray-50'}`}>
-                <History size={18} /> Tarix
-            </button>
-            <button onClick={() => setActiveTab('config')} className={`w-full text-left px-4 py-3 rounded-xl font-medium flex items-center gap-3 transition-colors ${activeTab === 'config' ? 'bg-blue-50 text-blue-600' : 'text-gray-600 hover:bg-gray-50'}`}>
-                <Settings size={18} /> Sozlamalar
-            </button>
-        </div>
+    <div className="flex h-full bg-gray-100">
+      {/* Sidebar Tabs */}
+      <div className="w-64 bg-white border-r p-4 flex flex-col gap-2">
+        <h2 className="text-xl font-bold mb-4 text-gray-800">SMS Marketing</h2>
+        
+        <button onClick={() => setActiveTab('templates')} className={`p-3 rounded-lg text-left flex items-center gap-3 ${activeTab === 'templates' ? 'bg-blue-50 text-blue-600' : 'hover:bg-gray-50'}`}>
+          <FileText size={20} /> Shablonlar
+        </button>
+        <button onClick={() => setActiveTab('broadcast')} className={`p-3 rounded-lg text-left flex items-center gap-3 ${activeTab === 'broadcast' ? 'bg-blue-50 text-blue-600' : 'hover:bg-gray-50'}`}>
+          <Send size={20} /> Ommaviy Xabar
+        </button>
+        <button onClick={() => setActiveTab('history')} className={`p-3 rounded-lg text-left flex items-center gap-3 ${activeTab === 'history' ? 'bg-blue-50 text-blue-600' : 'hover:bg-gray-50'}`}>
+          <History size={20} /> Tarix
+        </button>
+        <button onClick={() => setActiveTab('settings')} className={`p-3 rounded-lg text-left flex items-center gap-3 ${activeTab === 'settings' ? 'bg-blue-50 text-blue-600' : 'hover:bg-gray-50'}`}>
+          <Settings size={20} /> Sozlamalar
+        </button>
       </div>
 
       {/* Content */}
-      <div className="flex-1 p-8 overflow-hidden h-screen flex flex-col">
-          <div className="flex-1 min-h-0">
-            {activeTab === 'send' && renderSend()}
-            {activeTab === 'history' && renderHistory()}
-            {activeTab === 'config' && renderConfig()}
+      <div className="flex-1 p-8 overflow-y-auto">
+        
+        {/* SHABLONLAR */}
+        {activeTab === 'templates' && (
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+            {templates.map(t => (
+              <div key={t.type} className="bg-white p-6 rounded-xl shadow-sm border">
+                <div className="flex justify-between items-center mb-4">
+                  <h3 className="font-bold text-lg text-gray-700">{t.title}</h3>
+                  <div className="flex items-center gap-2">
+                    <span className="text-sm text-gray-500">Avto-yuborish:</span>
+                    <input 
+                      type="checkbox" 
+                      checked={!!t.is_active} 
+                      onChange={(e) => handleSaveTemplate({...t, is_active: e.target.checked})}
+                      className="w-5 h-5 accent-blue-600"
+                    />
+                  </div>
+                </div>
+                <textarea 
+                  className="w-full p-3 border rounded-lg h-32 text-sm focus:ring-2 focus:ring-blue-500 outline-none"
+                  value={t.content}
+                  onChange={(e) => {
+                    const newTemplates = templates.map(temp => temp.type === t.type ? {...temp, content: e.target.value} : temp);
+                    setTemplates(newTemplates);
+                  }}
+                />
+                <div className="mt-3 flex justify-between items-center">
+                  <span className="text-xs text-gray-400">O'zgaruvchilar: {'{name}'}, {'{amount}'}</span>
+                  <button 
+                    onClick={() => handleSaveTemplate(templates.find(temp => temp.type === t.type))}
+                    className="flex items-center gap-2 bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700"
+                  >
+                    <Save size={16} /> Saqlash
+                  </button>
+                </div>
+              </div>
+            ))}
           </div>
+        )}
+
+        {/* OMMAVIY XABAR */}
+        {activeTab === 'broadcast' && (
+          <div className="max-w-2xl mx-auto bg-white p-8 rounded-xl shadow-sm">
+            <h3 className="text-xl font-bold mb-6">Barcha mijozlarga xabar yuborish</h3>
+            <div className="mb-4 p-4 bg-blue-50 text-blue-700 rounded-lg text-sm">
+              Diqqat! Bu xabar bazadagi barcha raqami bor mijozlarga yuboriladi.
+            </div>
+            
+            <label className="block text-sm font-medium text-gray-700 mb-2">Xabar matni</label>
+            <textarea 
+              className="w-full p-4 border rounded-lg h-40 focus:ring-2 focus:ring-blue-500 outline-none mb-4"
+              placeholder="Masalan: Bizda yangi menyu! Marhamat qilib tashrif buyuring..."
+              value={bulkMessage}
+              onChange={(e) => setBulkMessage(e.target.value)}
+            />
+            
+            <button 
+              onClick={handleSendBulk}
+              disabled={loading}
+              className={`w-full py-3 rounded-lg font-bold text-white flex items-center justify-center gap-2
+                ${loading ? 'bg-gray-400 cursor-not-allowed' : 'bg-green-600 hover:bg-green-700'}`}
+            >
+              {loading ? <RefreshCw className="animate-spin" /> : <Send />} 
+              {loading ? 'Yuborilmoqda...' : 'Barchaga Yuborish'}
+            </button>
+          </div>
+        )}
+
+        {/* TARIX */}
+        {activeTab === 'history' && (
+          <div className="bg-white rounded-xl shadow-sm overflow-hidden">
+            <table className="w-full text-left">
+              <thead className="bg-gray-50 border-b">
+                <tr>
+                  <th className="p-4 font-medium text-gray-600">Sana</th>
+                  <th className="p-4 font-medium text-gray-600">Raqam</th>
+                  <th className="p-4 font-medium text-gray-600">Xabar</th>
+                  <th className="p-4 font-medium text-gray-600">Tur</th>
+                  <th className="p-4 font-medium text-gray-600">Holat</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y">
+                {logs.map(log => (
+                  <tr key={log.id} className="hover:bg-gray-50">
+                    <td className="p-4 text-sm text-gray-500">{log.date}</td>
+                    <td className="p-4 font-medium">{log.phone}</td>
+                    <td className="p-4 text-sm text-gray-600 max-w-xs truncate" title={log.message}>{log.message}</td>
+                    <td className="p-4 text-sm">
+                      <span className="px-2 py-1 bg-gray-100 rounded text-xs">{log.type}</span>
+                    </td>
+                    <td className="p-4">
+                      <span className={`px-2 py-1 rounded text-xs font-bold
+                        ${log.status === 'sent' ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
+                        {log.status === 'sent' ? 'Yuborildi' : 'Xatolik'}
+                      </span>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+
+        {/* SOZLAMALAR */}
+        {activeTab === 'settings' && (
+          <div className="max-w-md mx-auto bg-white p-8 rounded-xl shadow-sm">
+            <h3 className="text-xl font-bold mb-6 flex items-center gap-2">
+              <Settings className="text-gray-400" /> Eskiz.uz Sozlamalari
+            </h3>
+            
+            <div className="space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Email</label>
+                <input 
+                  type="email" 
+                  value={settings.eskiz_email}
+                  onChange={(e) => setSettings({...settings, eskiz_email: e.target.value})}
+                  className="w-full p-3 border rounded-lg outline-none focus:border-blue-500"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Parol</label>
+                <input 
+                  type="password" 
+                  value={settings.eskiz_password}
+                  onChange={(e) => setSettings({...settings, eskiz_password: e.target.value})}
+                  className="w-full p-3 border rounded-lg outline-none focus:border-blue-500"
+                />
+              </div>
+              
+              <button 
+                onClick={handleSaveSettings}
+                className="w-full bg-blue-600 text-white py-3 rounded-lg font-bold hover:bg-blue-700 mt-4"
+              >
+                Saqlash va Ulash
+              </button>
+            </div>
+            
+            <div className="mt-6 text-xs text-gray-400 text-center">
+              Eskiz.uz hisobingiz bo'lishi va SMS paketi faollashgan bo'lishi kerak.
+            </div>
+          </div>
+        )}
+
       </div>
     </div>
   );

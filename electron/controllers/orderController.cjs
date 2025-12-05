@@ -246,8 +246,33 @@ module.exports = {
     }
   },
   
+  // 5. YANGILANGAN: HISOBOTLAR UCHUN SALES OLISH (LOCAL TIME)
   getSales: (startDate, endDate) => {
-    if (!startDate || !endDate) return db.prepare('SELECT * FROM sales ORDER BY date DESC LIMIT 100').all();
-    return db.prepare('SELECT * FROM sales WHERE date >= ? AND date <= ? ORDER BY date DESC').all(startDate, endDate);
+    try {
+        // Agar sanalar berilmagan bo'lsa, oxirgi 100 ta savdoni berish
+        if (!startDate || !endDate) {
+            return db.prepare('SELECT * FROM sales ORDER BY date DESC LIMIT 100').all();
+        }
+
+        // MUHIM: SQLite da datetime(date, 'localtime') ishlatib, mahalliy vaqt bo'yicha filtrlash
+        // Frontenddan kelgan sanalar ISO formatida: "2024-12-06T00:00:00.000Z"
+        // Biz bazadagi UTC vaqtni local time ga o'girib, keyin sana oralig'iga tekshiramiz
+        
+        const query = `
+            SELECT * FROM sales 
+            WHERE datetime(date, 'localtime') >= datetime(?) 
+              AND datetime(date, 'localtime') <= datetime(?)
+            ORDER BY date DESC
+        `;
+
+        const sales = db.prepare(query).all(startDate, endDate);
+        
+        log.info(`getSales: ${startDate} dan ${endDate} gacha ${sales.length} ta savdo topildi`);
+        return sales;
+
+    } catch (err) {
+        log.error("getSales xatosi:", err);
+        throw err;
+    }
   }
 };

@@ -11,13 +11,24 @@ import {
 
 const COLORS = ['#3B82F6', '#10B981', '#F59E0B', '#EF4444', '#8B5CF6']; // Moviy, Yashil, Sariq, Qizil, Binafsha
 
+// YANGI: Bugungi sanani olish funksiyasi
+const getTodayDate = () => {
+  const today = new Date();
+  const year = today.getFullYear();
+  const month = String(today.getMonth() + 1).padStart(2, '0');
+  const day = String(today.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+};
+
 const Reports = () => {
   const [activeTab, setActiveTab] = useState('dashboard'); // dashboard, staff, products, history
   const [salesData, setSalesData] = useState([]);
   const [loading, setLoading] = useState(false);
+  
+  // YANGILANDI: Default qiymat har safar bugungi sana
   const [dateRange, setDateRange] = useState({
-    startDate: new Date().toISOString().split('T')[0],
-    endDate: new Date().toISOString().split('T')[0]
+    startDate: getTodayDate(),
+    endDate: getTodayDate()
   });
 
   // --- DATA LOADING ---

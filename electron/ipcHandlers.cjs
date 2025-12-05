@@ -1,302 +1,110 @@
-const { db, notify, hashPIN } = require('./database.cjs');
-const { sendSMS, loginToEskiz } = require('./services/smsService.cjs');
+const { app } = require('electron');
+const { db, notify } = require('./database.cjs');
 const log = require('electron-log');
+
+// Controllerlarni import qilish
+const tableController = require('./controllers/tableController.cjs');
+const productController = require('./controllers/productController.cjs');
+const orderController = require('./controllers/orderController.cjs');
+const settingsController = require('./controllers/settingsController.cjs');
+const staffController = require('./controllers/staffController.cjs');
+const userController = require('./controllers/userController.cjs'); // Customers & Debtors
+const smsController = require('./controllers/smsController.cjs');   // SMS Marketing
 
 function registerIpcHandlers(ipcMain) {
     
     // ==========================================
-    // 1. AUTH & SETTINGS (Tizim va Sozlamalar)
+    // 1. AUTH (Tizimga kirish)
     // ==========================================
-
-    // Login (PIN tekshirish)
-    ipcMain.handle('login', async (event, inputPin) => {
+    ipcMain.handle('login', async (event, pin) => {
         try {
-            const users = db.prepare('SELECT * FROM users').all();
-            const foundUser = users.find(u => {
-                const { hash } = hashPIN(inputPin, u.salt);
-                return hash === u.pin;
-            });
-
-            if (foundUser) {
-                const { pin, salt, ...safeUser } = foundUser;
-                return { success: true, user: safeUser };
-            }
-            return { success: false, error: 'PIN noto\'g\'ri' };
+            return staffController.login(pin);
         } catch (error) {
-            log.error('Login xatosi:', error);
-            return { success: false, error: 'Tizim xatosi' };
-        }
-    });
-
-    // Sozlamalarni olish
-    ipcMain.handle('get-settings', () => {
-        const rows = db.prepare('SELECT * FROM settings').all();
-        const settings = {};
-        rows.forEach(r => settings[r.key] = r.value);
-        return settings;
-    });
-
-    // Sozlamalarni saqlash
-    ipcMain.handle('save-settings', (event, newSettings) => {
-        const stmt = db.prepare('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)');
-        db.transaction(() => {
-            for (const [key, value] of Object.entries(newSettings)) {
-                stmt.run(key, String(value));
-            }
-        })();
-        
-        // Agar Eskiz login o'zgargan bo'lsa, qayta ulanib ko'ramiz
-        if (newSettings.eskiz_email || newSettings.eskiz_password) {
-            loginToEskiz();
-        }
-
-        notify('settings');
-        return { success: true };
-    });
-
-    // ==========================================
-    // 2. POS CORE (Zallar, Stollar, Kategoriyalar)
-    // ==========================================
-
-    // --- ZALLAR ---
-    ipcMain.handle('get-halls', () => {
-        return db.prepare('SELECT * FROM halls').all();
-    });
-
-    ipcMain.handle('save-hall', (event, hall) => {
-        if (hall.id) {
-            db.prepare('UPDATE halls SET name = ? WHERE id = ?').run(hall.name, hall.id);
-        } else {
-            db.prepare('INSERT INTO halls (name) VALUES (?)').run(hall.name);
-        }
-        notify('halls');
-        return { success: true };
-    });
-
-    ipcMain.handle('delete-hall', (event, id) => {
-        db.prepare('DELETE FROM halls WHERE id = ?').run(id);
-        notify('halls');
-        return { success: true };
-    });
-
-    // --- STOLLAR ---
-    ipcMain.handle('get-tables', () => {
-        return db.prepare('SELECT * FROM tables').all();
-    });
-
-    ipcMain.handle('save-table', (event, table) => {
-        if (table.id) {
-            db.prepare('UPDATE tables SET name = ?, hall_id = ? WHERE id = ?').run(table.name, table.hall_id, table.id);
-        } else {
-            db.prepare('INSERT INTO tables (name, hall_id) VALUES (?, ?)').run(table.name, table.hall_id);
-        }
-        notify('tables');
-        return { success: true };
-    });
-
-    ipcMain.handle('delete-table', (event, id) => {
-        db.prepare('DELETE FROM tables WHERE id = ?').run(id);
-        notify('tables');
-        return { success: true };
-    });
-
-    // --- KATEGORIYALAR ---
-    ipcMain.handle('get-categories', () => {
-        return db.prepare('SELECT * FROM categories').all();
-    });
-
-    ipcMain.handle('save-category', (event, cat) => {
-        if (cat.id) {
-            db.prepare('UPDATE categories SET name = ? WHERE id = ?').run(cat.name, cat.id);
-        } else {
-            db.prepare('INSERT INTO categories (name) VALUES (?)').run(cat.name);
-        }
-        notify('categories');
-        return { success: true };
-    });
-
-    ipcMain.handle('delete-category', (event, id) => {
-        db.prepare('DELETE FROM categories WHERE id = ?').run(id);
-        notify('categories');
-        return { success: true };
-    });
-
-    // --- MAHSULOTLAR ---
-    ipcMain.handle('get-products', () => {
-        return db.prepare('SELECT * FROM products WHERE status = "active"').all();
-    });
-
-    ipcMain.handle('save-product', (event, prod) => {
-        if (prod.id) {
-            db.prepare('UPDATE products SET name = ?, price = ?, category_id = ?, printer = ? WHERE id = ?')
-              .run(prod.name, prod.price, prod.category_id, prod.printer, prod.id);
-        } else {
-            db.prepare('INSERT INTO products (name, price, category_id, printer) VALUES (?, ?, ?, ?)')
-              .run(prod.name, prod.price, prod.category_id, prod.printer);
-        }
-        notify('products');
-        return { success: true };
-    });
-
-    ipcMain.handle('delete-product', (event, id) => {
-        db.prepare('UPDATE products SET status = "deleted" WHERE id = ?').run(id);
-        notify('products');
-        return { success: true };
-    });
-
-    // ==========================================
-    // 3. ORDERS & SALES (Buyurtma va Savdo)
-    // ==========================================
-
-    // Stol buyurtmalarini olish
-    ipcMain.handle('get-order-items', (event, tableId) => {
-        if (!tableId) return [];
-        return db.prepare('SELECT * FROM order_items WHERE table_id = ?').all(tableId);
-    });
-
-    // Buyurtma qo'shish
-    ipcMain.handle('add-order-item', (event, item) => {
-        db.prepare('INSERT INTO order_items (table_id, product_name, price, quantity, destination) VALUES (?, ?, ?, ?, ?)')
-          .run(item.table_id, item.product_name, item.price, item.quantity, item.destination || 'kitchen');
-        
-        // Stol holatini yangilash
-        db.prepare("UPDATE tables SET status = 'busy', total_amount = total_amount + ? WHERE id = ?")
-          .run(item.price * item.quantity, item.table_id);
-          
-        notify('tables', item.table_id);
-        return { success: true };
-    });
-
-    // Buyurtmani o'chirish
-    ipcMain.handle('delete-order-item', (event, { id, table_id, amount }) => {
-        db.prepare('DELETE FROM order_items WHERE id = ?').run(id);
-        db.prepare('UPDATE tables SET total_amount = total_amount - ? WHERE id = ?').run(amount, table_id);
-        
-        // Agar stolda boshqa buyurtma qolmasa, statusni free qilish
-        const count = db.prepare('SELECT count(*) as count FROM order_items WHERE table_id = ?').get(table_id).count;
-        if (count === 0) {
-            db.prepare("UPDATE tables SET status = 'free' WHERE id = ?").run(table_id);
-        }
-
-        notify('tables', table_id);
-        return { success: true };
-    });
-
-    // CHECKOUT (Yopish va To'lov)
-    ipcMain.handle('checkout', (event, { table_id, total_amount, payment_method, customer_id, waiter_name, discount, items, due_date }) => {
-        const date = new Date().toISOString();
-        const check_number = Math.floor(Date.now() / 1000); // Simple check number
-        
-        const insertSale = db.transaction(() => {
-            // 1. Sales jadvaliga yozish
-            const info = db.prepare(`
-                INSERT INTO sales (check_number, date, total_amount, subtotal, discount, payment_method, customer_id, waiter_name, items_json)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-            `).run(check_number, date, total_amount, total_amount + discount, discount, payment_method, customer_id || null, waiter_name, JSON.stringify(items));
-
-            const sale_id = info.lastInsertRowid;
-
-            // 2. Sale Items yozish
-            const itemStmt = db.prepare(`
-                INSERT INTO sale_items (sale_id, product_name, price, quantity, total_price, date)
-                VALUES (?, ?, ?, ?, ?, ?)
-            `);
-            for (const item of items) {
-                itemStmt.run(sale_id, item.product_name, item.price, item.quantity, item.price * item.quantity, date);
-            }
-
-            // 3. Stolni bo'shatish
-            db.prepare("UPDATE tables SET status = 'free', total_amount = 0, current_check_number = 0, guests = 0 WHERE id = ?").run(table_id);
-            db.prepare("DELETE FROM order_items WHERE table_id = ?").run(table_id);
-
-            // 4. Agar NASIYA bo'lsa
-            if (payment_method === 'debt' && customer_id) {
-                // Customer balansini yangilash (qarzini oshirish)
-                db.prepare("UPDATE customers SET debt = debt + ? WHERE id = ?").run(total_amount, customer_id);
-                
-                // Debt history
-                db.prepare("INSERT INTO debt_history (customer_id, amount, type, date, comment) VALUES (?, ?, 'debt', ?, ?)")
-                  .run(customer_id, total_amount, date, `Check #${check_number}`);
-
-                // YANGI: Debt Tracking (SMS uchun)
-                if (due_date) {
-                    db.prepare(`
-                        INSERT INTO customer_debts (customer_id, amount, due_date, created_at)
-                        VALUES (?, ?, ?, datetime('now', 'localtime'))
-                    `).run(customer_id, total_amount, due_date);
-                }
-            }
-        });
-
-        try {
-            insertSale();
-            notify('tables');
-            notify('sales');
-            return { success: true, check_number };
-        } catch (err) {
-            log.error('Checkout error:', err);
-            return { success: false, error: err.message };
+            log.warn('Login failed:', error.message);
+            throw error; // Frontendga xatoni qaytaramiz
         }
     });
 
     // ==========================================
-    // 4. CUSTOMERS (Mijozlar)
+    // 2. TABLES & HALLS (Zallar va Stollar)
     // ==========================================
-    ipcMain.handle('get-customers', () => {
-        return db.prepare('SELECT * FROM customers').all();
-    });
+    ipcMain.handle('get-halls', () => tableController.getHalls());
+    ipcMain.handle('add-hall', (e, name) => tableController.addHall(name));
+    ipcMain.handle('delete-hall', (e, id) => tableController.deleteHall(id));
 
-    ipcMain.handle('save-customer', (event, cust) => {
-        if (cust.id) {
-            db.prepare('UPDATE customers SET name = ?, phone = ?, notes = ?, birthday = ? WHERE id = ?')
-              .run(cust.name, cust.phone, cust.notes, cust.birthday, cust.id);
-        } else {
-            db.prepare('INSERT INTO customers (name, phone, notes, birthday) VALUES (?, ?, ?, ?)')
-              .run(cust.name, cust.phone, cust.notes, cust.birthday);
-        }
-        notify('customers');
-        return { success: true };
-    });
-
-    ipcMain.handle('delete-customer', (event, id) => {
-        db.prepare('DELETE FROM customers WHERE id = ?').run(id);
-        notify('customers');
-        return { success: true };
-    });
+    ipcMain.handle('get-tables', () => tableController.getTables());
+    ipcMain.handle('get-tables-by-hall', (e, id) => tableController.getTablesByHall(id));
+    ipcMain.handle('add-table', (e, { hallId, name }) => tableController.addTable(hallId, name));
+    ipcMain.handle('delete-table', (e, id) => tableController.deleteTable(id));
+    ipcMain.handle('update-table-status', (e, { id, status }) => tableController.updateTableStatus(id, status));
 
     // ==========================================
-    // 5. SMS MARKETING & LOGS (Yangi Modul)
+    // 3. MENU (Kategoriya va Mahsulotlar)
     // ==========================================
+    ipcMain.handle('get-categories', () => productController.getCategories());
+    ipcMain.handle('add-category', (e, name) => productController.addCategory(name));
+
+    ipcMain.handle('get-products', () => productController.getProducts());
+    ipcMain.handle('add-product', (e, product) => productController.addProduct(product));
+    ipcMain.handle('toggle-product-status', (e, { id, status }) => productController.toggleProductStatus(id, status));
+    ipcMain.handle('delete-product', (e, id) => productController.deleteProduct(id));
+
+    // ==========================================
+    // 4. ORDERS & CHECKOUT (Buyurtma va To'lov)
+    // ==========================================
+    ipcMain.handle('get-table-items', (e, tableId) => orderController.getTableItems(tableId));
     
-    ipcMain.handle('get-sms-templates', () => {
-        return db.prepare("SELECT * FROM sms_templates").all();
+    // Desktopdan buyurtma qo'shish (OrderSummary.jsx da ishlatilishi mumkin, lekin hozir asosan waiterapp da)
+    // Agar OrderSummary da 'add-order-item' ishlatilayotgan bo'lsa:
+    ipcMain.handle('add-order-item', (e, item) => orderController.addItem(item));
+
+    ipcMain.handle('checkout', async (e, data) => {
+        return await orderController.checkout(data);
     });
 
-    ipcMain.handle('save-sms-template', (event, { type, content, title, is_active }) => {
-        db.prepare("UPDATE sms_templates SET content = ?, title = ?, is_active = ? WHERE type = ?")
-          .run(content, title, is_active ? 1 : 0, type);
-        return { success: true };
-    });
+    // Hisobotlar uchun
+    ipcMain.handle('get-sales', (e, { startDate, endDate }) => orderController.getSales(startDate, endDate));
 
-    ipcMain.handle('get-sms-logs', () => {
-        return db.prepare("SELECT * FROM sms_logs ORDER BY id DESC LIMIT 100").all();
-    });
+    // ==========================================
+    // 5. CUSTOMERS & DEBTORS (Mijozlar va Qarzdorlar)
+    // ==========================================
+    ipcMain.handle('get-customers', () => userController.getCustomers());
+    ipcMain.handle('add-customer', (e, customer) => userController.addCustomer(customer));
+    ipcMain.handle('delete-customer', (e, id) => userController.deleteCustomer(id));
 
-    ipcMain.handle('send-mass-sms', async (event, { message, filter }) => {
-        let customers = [];
-        if (filter === 'all') {
-            customers = db.prepare("SELECT name, phone FROM customers WHERE phone IS NOT NULL AND phone != ''").all();
-        } else if (filter === 'debtors') {
-            customers = db.prepare("SELECT name, phone FROM customers WHERE debt > 0 AND phone IS NOT NULL").all();
-        }
+    ipcMain.handle('get-debtors', () => userController.getDebtors());
+    ipcMain.handle('get-debt-history', (e, id) => userController.getDebtHistory(id));
+    ipcMain.handle('pay-debt', (e, { customerId, amount, comment }) => userController.payDebt(customerId, amount, comment));
 
-        let sentCount = 0;
-        for (const cust of customers) {
-            const finalMsg = message.replace('{name}', cust.name);
-            const res = await sendSMS(cust.phone, finalMsg, 'bulk');
-            if (res.success) sentCount++;
-        }
-        return { success: true, count: sentCount, total: customers.length };
+    // ==========================================
+    // 6. SETTINGS & STAFF (Sozlamalar va Xodimlar)
+    // ==========================================
+    ipcMain.handle('get-settings', () => settingsController.getSettings());
+    ipcMain.handle('save-settings', (e, settings) => settingsController.saveSettings(settings));
+    
+    ipcMain.handle('get-kitchens', () => settingsController.getKitchens());
+    ipcMain.handle('save-kitchen', (e, kitchen) => settingsController.saveKitchen(kitchen));
+    ipcMain.handle('delete-kitchen', (e, id) => settingsController.deleteKitchen(id));
+
+    ipcMain.handle('get-users', () => staffController.getUsers());
+    ipcMain.handle('save-user', (e, user) => staffController.saveUser(user));
+    ipcMain.handle('delete-user', (e, id) => staffController.deleteUser(id));
+
+    ipcMain.handle('backup-db', () => settingsController.backupDB());
+
+    // ==========================================
+    // 7. SMS MARKETING (Yangi Modul)
+    // ==========================================
+    ipcMain.handle('get-sms-templates', () => smsController.getTemplates());
+    
+    // Frontend {type, content, ...} jo'natadi, Controller (type, text) kutadi
+    ipcMain.handle('save-sms-template', (e, data) => smsController.updateTemplate(data.type, data.content));
+    
+    ipcMain.handle('get-sms-logs', () => smsController.getHistory());
+    
+    ipcMain.handle('send-mass-sms', async (e, { message, filter }) => {
+        // Hozircha filter logikasi controller ichida oddiy broadcast
+        return await smsController.sendBroadcast(message);
     });
 }
 

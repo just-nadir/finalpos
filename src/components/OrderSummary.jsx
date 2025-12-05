@@ -10,6 +10,7 @@ const OrderSummary = ({ table, onDeselect }) => {
   const [bonusToUse, setBonusToUse] = useState(0);
   const [orderItems, setOrderItems] = useState([]);
   const [loading, setLoading] = useState(false);
+  const [printingCheck, setPrintingCheck] = useState(false);
   
   const [settings, setSettings] = useState({});
 
@@ -49,13 +50,28 @@ const OrderSummary = ({ table, onDeselect }) => {
   };
 
   const handlePrintCheck = async () => {
-    if (!table || !window.electron) return;
+    if (!table || !window.electron || printingCheck) return;
+    
+    setPrintingCheck(true);
     try {
       const { ipcRenderer } = window.electron;
-      // Chek chiqarish uchun hozirgi holatdagi checkout funksiyasiga o'xshash alohida 'print-check' handler ham qo'shish mumkin
-      // Lekin hozircha statusni o'zgartirish bilan cheklanamiz
-      await ipcRenderer.invoke('update-table-status', { id: table.id, status: 'payment' });
-    } catch (error) { console.error(error); }
+      const result = await ipcRenderer.invoke('print-check', table.id);
+      
+      if (result.success) {
+        console.log(`✅ HISOB chop etildi: Check #${result.checkNumber}`);
+        // Statusni real-time yangilash uchun onDeselect chaqirilishi mumkin
+        // yoki stollarni qayta yuklash
+      }
+    } catch (error) {
+      console.error('HISOB chiqarishda xato:', error);
+      alert(`Xato: ${error.message}`);
+    } finally {
+      setPrintingCheck(false);
+    }
+  };
+
+  const handlePrintCheckDisabled = () => {
+    return !table || orderItems.length === 0 || printingCheck || loading;
   };
 
   const subtotal = orderItems.reduce((acc, item) => acc + (item.price * item.quantity), 0);
@@ -138,14 +154,13 @@ const OrderSummary = ({ table, onDeselect }) => {
           <div className="flex justify-between items-center mb-1">
             <h2 className="text-2xl font-bold text-gray-800">{table.name}</h2>
             
-            {/* --- YANGI: CHEK RAQAMI --- */}
+            {/* CHEK RAQAMI */}
             {table.current_check_number > 0 && (
                 <div className="flex items-center gap-1 bg-white px-3 py-1 rounded-full shadow-sm border border-gray-200">
                     <Hash size={14} className="text-gray-500" />
                     <span className="font-black text-lg text-gray-800">{table.current_check_number}</span>
                 </div>
             )}
-            {/* ------------------------- */}
           </div>
           
           <div className="flex justify-between items-center mt-2">
@@ -229,14 +244,28 @@ const OrderSummary = ({ table, onDeselect }) => {
         {/* BUTTONS */}
         <div className="p-4 border-t border-gray-100 space-y-3 bg-white">
           <div className="grid grid-cols-2 gap-3">
-              <button onClick={() => setIsCustomerModalOpen(true)} className={`flex items-center justify-center gap-2 py-3 border-2 rounded-xl font-bold transition-colors ${selectedCustomer ? 'bg-blue-50 border-blue-200 text-blue-700' : 'bg-white border-gray-100 text-gray-700 hover:bg-gray-50'}`}>
+              <button 
+                onClick={() => setIsCustomerModalOpen(true)} 
+                className={`flex items-center justify-center gap-2 py-3 border-2 rounded-xl font-bold transition-colors ${selectedCustomer ? 'bg-blue-50 border-blue-200 text-blue-700' : 'bg-white border-gray-100 text-gray-700 hover:bg-gray-50'}`}
+              >
                   <User size={20} /> {selectedCustomer ? 'Almashtirish' : 'Mijoz'}
               </button>
-              <button onClick={handlePrintCheck} className="flex items-center justify-center gap-2 py-3 bg-white border-2 border-gray-100 text-gray-700 rounded-xl font-bold hover:bg-yellow-50 hover:text-yellow-700 hover:border-yellow-200 transition-colors">
-                  <Printer size={20} /> Chek
+              <button 
+                onClick={handlePrintCheck}
+                disabled={handlePrintCheckDisabled()}
+                className={`flex items-center justify-center gap-2 py-3 border-2 rounded-xl font-bold transition-colors ${
+                  handlePrintCheckDisabled() 
+                    ? 'bg-gray-100 border-gray-200 text-gray-400 cursor-not-allowed' 
+                    : 'bg-white border-gray-100 text-gray-700 hover:bg-yellow-50 hover:text-yellow-700 hover:border-yellow-200'
+                }`}
+              >
+                  <Printer size={20} /> {printingCheck ? 'Chop...' : 'Chek'}
               </button>
           </div>
-          <button onClick={() => setIsPaymentModalOpen(true)} className="w-full bg-blue-600 text-white py-4 rounded-xl font-bold text-lg shadow-lg hover:bg-blue-700 transition-all flex items-center justify-center gap-2">
+          <button 
+            onClick={() => setIsPaymentModalOpen(true)} 
+            className="w-full bg-blue-600 text-white py-4 rounded-xl font-bold text-lg shadow-lg hover:bg-blue-700 transition-all flex items-center justify-center gap-2"
+          >
             <CreditCard size={20} /> To'lovni Yopish
           </button>
         </div>

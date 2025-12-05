@@ -108,7 +108,6 @@ module.exports = {
                 await printerService.printKitchenTicket(items, tableName, checkNumber, nameToPrint);
             } catch (printErr) {
                 log.error("Oshxona printeri xatosi:", printErr);
-                // YANGI: Xatoni frontendga yuborish
                 notify('printer-error', `Oshxona printeri: ${printErr.message}`);
             }
         }, 100);
@@ -119,7 +118,73 @@ module.exports = {
     }
   },
 
-  // 3. Checkout (To'lov)
+  // 3. YANGI: HISOB CHIQARISH (Pre-check Print)
+  printCheck: async (tableId) => {
+    try {
+        // Stol ma'lumotlarini olish
+        const table = db.prepare('SELECT * FROM tables WHERE id = ?').get(tableId);
+        if (!table) {
+            throw new Error('Stol topilmadi');
+        }
+
+        // Buyurtma itemlarini olish
+        const items = db.prepare('SELECT * FROM order_items WHERE table_id = ?').all(tableId);
+        if (items.length === 0) {
+            throw new Error('Buyurtmalar mavjud emas');
+        }
+
+        // Check raqamini olish yoki yaratish
+        const checkNumber = getOrCreateCheckNumber(tableId);
+
+        // Sozlamalarni olish (xizmat haqini hisoblash uchun)
+        const settingsRows = db.prepare('SELECT * FROM settings').all();
+        const settings = settingsRows.reduce((acc, row) => { 
+            acc[row.key] = row.value; 
+            return acc; 
+        }, {});
+
+        // Hisob-kitob
+        const subtotal = items.reduce((acc, item) => acc + (item.price * item.quantity), 0);
+        const guestsCount = table.guests || 0;
+
+        let service = 0;
+        const svcValue = Number(settings.serviceChargeValue) || 0;
+        
+        if (settings.serviceChargeType === 'percent') {
+            service = (subtotal * svcValue) / 100;
+        } else {
+            service = guestsCount * svcValue;
+        }
+
+        const total = subtotal + service;
+
+        // Printerga yuborish
+        await printerService.printBill({
+            checkNumber,
+            tableName: table.name,
+            waiterName: table.waiter_name || 'Ofitsiant',
+            items,
+            subtotal,
+            service,
+            total
+        });
+
+        // Stol statusini 'payment' ga o'zgartirish
+        db.prepare("UPDATE tables SET status = 'payment' WHERE id = ?").run(tableId);
+        notify('tables', null);
+
+        log.info(`HISOB chop etildi: Stol #${tableId}, Check #${checkNumber}`);
+        return { success: true, checkNumber };
+
+    } catch (err) {
+        log.error("printCheck xatosi:", err);
+        // Xatoni frontendga yuborish
+        notify('printer-error', `HISOB chiqarishda xato: ${err.message}`);
+        throw err;
+    }
+  },
+
+  // 4. Checkout (To'lov)
   checkout: async (data) => {
     const { tableId, total, subtotal, discount, paymentMethod, customerId, items } = data;
     const date = new Date().toISOString();
@@ -171,7 +236,6 @@ module.exports = {
                 });
             } catch (err) {
                 log.error("Kassa printeri xatosi:", err);
-                // YANGI: Xatoni frontendga yuborish
                 notify('printer-error', `Kassa printeri: ${err.message}`);
             }
         }, 100);

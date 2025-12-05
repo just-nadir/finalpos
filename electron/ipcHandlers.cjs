@@ -58,6 +58,16 @@ function registerIpcHandlers(ipcMain) {
     // Agar OrderSummary da 'add-order-item' ishlatilayotgan bo'lsa:
     ipcMain.handle('add-order-item', (e, item) => orderController.addItem(item));
 
+    // YANGI: HISOB chiqarish (Pre-check)
+    ipcMain.handle('print-check', async (e, tableId) => {
+        try {
+            return await orderController.printCheck(tableId);
+        } catch (error) {
+            log.error('print-check xatosi:', error);
+            throw error;
+        }
+    });
+
     ipcMain.handle('checkout', async (e, data) => {
         return await orderController.checkout(data);
     });

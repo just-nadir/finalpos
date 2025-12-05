@@ -117,7 +117,7 @@ async function printHtml(htmlContent, printerName) {
 }
 
 module.exports = {
-    // 1. Kassa Cheki
+    // 1. Kassa Cheki (To'lov amalga oshirilgandan keyin)
     printOrderReceipt: async (orderData) => {
         const settings = getSettings();
         const printerName = settings.printerReceiptIP;
@@ -216,7 +216,100 @@ module.exports = {
         await printHtml(fullHtml, printerName);
     },
 
-    // 2. Oshxona Cheki (Runner)
+    // 2. YANGI: HISOB (Pre-check) - Mijozga ko'rsatiladigan chek
+    printBill: async (billData) => {
+        const settings = getSettings();
+        const printerName = settings.printerReceiptIP;
+
+        const restaurantName = settings.restaurantName || "RESTORAN";
+        const address = settings.address || "";
+        const phone = settings.phone || "";
+        const checkNum = billData.checkNumber || 0;
+        const waiterName = billData.waiterName || "Ofitsiant";
+
+        const itemsHtml = billData.items.map(item => `
+            <tr>
+                <td class="col-name">${item.product_name}</td>
+                <td class="col-qty">${item.quantity}</td>
+                <td class="col-price">${(item.price * item.quantity).toLocaleString()}</td>
+            </tr>
+        `).join('');
+
+        const content = `
+            <div class="text-center">
+                <div class="header-title uppercase">${restaurantName}</div>
+                ${address ? `<div class="header-info">${address}</div>` : ''}
+                ${phone ? `<div class="header-info">Tel: ${phone}</div>` : ''}
+            </div>
+            
+            <div class="double-line"></div>
+            
+            <div class="text-center" style="margin: 10px 0;">
+                <div class="bold uppercase" style="font-size: 20px; letter-spacing: 2px;">HISOB</div>
+                <div style="font-size: 11px; color: #555;">(Pre-check)</div>
+            </div>
+            
+            <div class="line"></div>
+            
+            <div class="flex">
+                <span>Chek:</span>
+                <span class="bold"># ${checkNum}</span>
+            </div>
+            <div class="flex">
+                <span>Sana:</span>
+                <span>${new Date().toLocaleString('uz-UZ')}</span>
+            </div>
+            <div class="flex">
+                <span>Stol:</span>
+                <span class="bold">${billData.tableName}</span>
+            </div>
+            <div class="flex" style="margin-top: 2px;">
+                <span>Ofitsiant:</span>
+                <span class="bold uppercase" style="font-size: 14px;">${waiterName}</span>
+            </div>
+
+            <div class="line"></div>
+
+            <table>
+                <tr style="border-bottom: 1px solid #000;">
+                    <td class="col-name bold">Nomi</td>
+                    <td class="col-qty bold">Soni</td>
+                    <td class="col-price bold">Summa</td>
+                </tr>
+                ${itemsHtml}
+            </table>
+
+            <div class="line"></div>
+
+            <div class="flex">
+                <span>Jami:</span>
+                <span>${(billData.subtotal || 0).toLocaleString()}</span>
+            </div>
+            
+            ${billData.service > 0 ? `
+            <div class="flex">
+                <span>Xizmat:</span>
+                <span>${billData.service.toLocaleString()}</span>
+            </div>` : ''}
+
+            <div class="double-line"></div>
+
+            <div class="flex total-row">
+                <span>JAMI:</span>
+                <span>${billData.total.toLocaleString()} so'm</span>
+            </div>
+
+            <div class="text-center footer-msg" style="margin-top: 15px; border-top: 1px dashed #000; padding-top: 10px;">
+                <div>Yoqimli ishtaxa!</div>
+                <div style="font-size: 10px; color: #666; margin-top: 5px;">(To'lov qilinmadi)</div>
+            </div>
+        `;
+
+        const fullHtml = createHtmlTemplate(content);
+        await printHtml(fullHtml, printerName);
+    },
+
+    // 3. Oshxona Cheki (Runner)
     printKitchenTicket: async (items, tableName, checkNumber, waiterName) => {
         const kitchens = db.prepare('SELECT * FROM kitchens').all();
         

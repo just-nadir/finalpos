@@ -17,34 +17,46 @@ const Marketing = () => {
   }, [activeTab]);
 
   const loadData = async () => {
-    if (activeTab === 'templates') {
-      const data = await window.api.invoke('get-sms-templates');
-      setTemplates(data);
-    } else if (activeTab === 'history') {
-      const data = await window.api.invoke('get-sms-logs');
-      setLogs(data);
-    } else if (activeTab === 'settings') {
-      const data = await window.api.invoke('get-settings');
-      setSettings({
-        eskiz_email: data.eskiz_email || '',
-        eskiz_password: data.eskiz_password || ''
-      });
+    // --- TUZATILDI: window.api o'rniga window.electron.ipcRenderer ishlatildi ---
+    if (!window.electron) return;
+    const { ipcRenderer } = window.electron;
+
+    try {
+      if (activeTab === 'templates') {
+        const data = await ipcRenderer.invoke('get-sms-templates');
+        setTemplates(data || []);
+      } else if (activeTab === 'history') {
+        const data = await ipcRenderer.invoke('get-sms-logs');
+        setLogs(data || []);
+      } else if (activeTab === 'settings') {
+        const data = await ipcRenderer.invoke('get-settings');
+        setSettings({
+          eskiz_email: data.eskiz_email || '',
+          eskiz_password: data.eskiz_password || ''
+        });
+      }
+    } catch (error) {
+      console.error("Yuklashda xatolik:", error);
+      showToast('error', 'Ma\'lumotlarni yuklashda xatolik bo\'ldi');
     }
   };
 
   const handleSaveTemplate = async (template) => {
+    if (!window.electron) return;
     try {
-      await window.api.invoke('save-sms-template', template);
+      await window.electron.ipcRenderer.invoke('save-sms-template', template);
       showToast('success', 'Shablon saqlandi');
-      loadData();
+      loadData(); // Yangilash
     } catch (error) {
+      console.error(error);
       showToast('error', 'Xatolik yuz berdi');
     }
   };
 
   const handleSaveSettings = async () => {
+    if (!window.electron) return;
     try {
-      await window.api.invoke('save-settings', settings);
+      await window.electron.ipcRenderer.invoke('save-settings', settings);
       showToast('success', 'Sozlamalar saqlandi va tizim qayta ulandi');
     } catch (error) {
       showToast('error', 'Saqlashda xatolik');
@@ -53,10 +65,11 @@ const Marketing = () => {
 
   const handleSendBulk = async () => {
     if (!bulkMessage) return showToast('error', 'Xabar matnini kiriting');
+    if (!window.electron) return;
     
     setLoading(true);
     try {
-      const res = await window.api.invoke('send-mass-sms', { message: bulkMessage, filter: 'all' });
+      const res = await window.electron.ipcRenderer.invoke('send-mass-sms', { message: bulkMessage, filter: 'all' });
       showToast('success', `${res.count} ta xabar yuborildi`);
       setBulkMessage('');
     } catch (e) {
@@ -92,6 +105,8 @@ const Marketing = () => {
         {/* SHABLONLAR */}
         {activeTab === 'templates' && (
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+            {templates.length === 0 && <p className="text-gray-400 col-span-2 text-center">Shablonlar yuklanmoqda yoki mavjud emas...</p>}
+            
             {templates.map(t => (
               <div key={t.type} className="bg-white p-6 rounded-xl shadow-sm border">
                 <div className="flex justify-between items-center mb-4">
@@ -102,12 +117,12 @@ const Marketing = () => {
                       type="checkbox" 
                       checked={!!t.is_active} 
                       onChange={(e) => handleSaveTemplate({...t, is_active: e.target.checked})}
-                      className="w-5 h-5 accent-blue-600"
+                      className="w-5 h-5 accent-blue-600 cursor-pointer"
                     />
                   </div>
                 </div>
                 <textarea 
-                  className="w-full p-3 border rounded-lg h-32 text-sm focus:ring-2 focus:ring-blue-500 outline-none"
+                  className="w-full p-3 border rounded-lg h-32 text-sm focus:ring-2 focus:ring-blue-500 outline-none resize-none"
                   value={t.content}
                   onChange={(e) => {
                     const newTemplates = templates.map(temp => temp.type === t.type ? {...temp, content: e.target.value} : temp);
@@ -118,7 +133,7 @@ const Marketing = () => {
                   <span className="text-xs text-gray-400">O'zgaruvchilar: {'{name}'}, {'{amount}'}</span>
                   <button 
                     onClick={() => handleSaveTemplate(templates.find(temp => temp.type === t.type))}
-                    className="flex items-center gap-2 bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700"
+                    className="flex items-center gap-2 bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 transition-colors"
                   >
                     <Save size={16} /> Saqlash
                   </button>
@@ -172,7 +187,7 @@ const Marketing = () => {
               <tbody className="divide-y">
                 {logs.map(log => (
                   <tr key={log.id} className="hover:bg-gray-50">
-                    <td className="p-4 text-sm text-gray-500">{log.date}</td>
+                    <td className="p-4 text-sm text-gray-500">{new Date(log.date).toLocaleString()}</td>
                     <td className="p-4 font-medium">{log.phone}</td>
                     <td className="p-4 text-sm text-gray-600 max-w-xs truncate" title={log.message}>{log.message}</td>
                     <td className="p-4 text-sm">
@@ -186,6 +201,11 @@ const Marketing = () => {
                     </td>
                   </tr>
                 ))}
+                {logs.length === 0 && (
+                    <tr>
+                        <td colSpan="5" className="p-8 text-center text-gray-400">Tarix bo'sh</td>
+                    </tr>
+                )}
               </tbody>
             </table>
           </div>

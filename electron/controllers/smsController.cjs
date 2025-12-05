@@ -44,7 +44,7 @@ const loginEskiz = async () => {
 
 // 2. Yagona SMS yuborish
 const sendOneSMS = async (phone, message, type = 'manual') => {
-    const cleanPhone = phone.replace(/\D/g, ''); 
+    const cleanPhone = phone.replace(/\D/g, '');
     if (cleanPhone.length < 9) return { success: false, error: "Raqam noto'g'ri" };
 
     if (!ESKIZ_TOKEN) await loginEskiz();
@@ -64,7 +64,7 @@ const sendOneSMS = async (phone, message, type = 'manual') => {
         });
 
         const status = 'sent';
-        db.prepare('INSERT INTO sms_history (phone, message, status, date, type) VALUES (?, ?, ?, ?, ?)').run(cleanPhone, message, status, new Date().toISOString(), type);
+        db.prepare('INSERT INTO sms_logs (phone, message, status, date, type) VALUES (?, ?, ?, ?, ?)').run(cleanPhone, message, status, new Date().toISOString(), type);
         
         return { success: true, data: res.data };
 
@@ -76,7 +76,8 @@ const sendOneSMS = async (phone, message, type = 'manual') => {
         }
 
         const status = 'failed';
-        db.prepare('INSERT INTO sms_history (phone, message, status, date, type) VALUES (?, ?, ?, ?, ?)').run(cleanPhone, message, status, new Date().toISOString(), type);
+        db.prepare('INSERT INTO sms_logs (phone, message, status, date, type) VALUES (?, ?, ?, ?, ?)').run(cleanPhone, message, status, new Date().toISOString(), type);
+        
         log.error("SMS Send Error:", err.message);
         return { success: false, error: err.message };
     }
@@ -94,7 +95,7 @@ module.exports = {
         return { success: true };
     },
 
-    // YANGI: Sozlamalarni o'qish (Faqat emailni qaytaramiz, parolni yashiramiz)
+    // YANGI: Sozlamalarni o'qish
     getSettings: () => {
         const email = getSetting('eskiz_email');
         return { email: email || '' };
@@ -103,26 +104,25 @@ module.exports = {
     // Shablonlarni olish
     getTemplates: () => db.prepare('SELECT * FROM sms_templates').all(),
     
-    // Shablonni yangilash
+    // Shablonni yangilash (TUZATILDI: 'template' -> 'content')
     updateTemplate: (type, text) => {
-        db.prepare('UPDATE sms_templates SET template = ? WHERE type = ?').run(text, type);
+        db.prepare('UPDATE sms_templates SET content = ? WHERE type = ?').run(text, type);
         return { success: true };
     },
 
     // YANGI: Tarixni olish
     getHistory: () => {
-        return db.prepare('SELECT * FROM sms_history ORDER BY id DESC LIMIT 100').all();
+        return db.prepare('SELECT * FROM sms_logs ORDER BY id DESC LIMIT 100').all();
     },
 
-    // Ommaviy yuborish (Barcha mijozlarga)
+    // Ommaviy yuborish
     sendBroadcast: async (message) => {
         const customers = db.prepare('SELECT phone FROM customers').all();
         let sentCount = 0;
         
         for (const c of customers) {
             if (c.phone) {
-                // Sekinlatish (Rate limitga tushmaslik uchun 500ms kutamiz)
-                await new Promise(r => setTimeout(r, 500)); 
+                await new Promise(r => setTimeout(r, 500)); // Rate limit
                 const res = await sendOneSMS(c.phone, message, 'news');
                 if (res.success) sentCount++;
             }

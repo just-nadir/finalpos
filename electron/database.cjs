@@ -25,7 +25,7 @@ function notify(type, id = null) {
   changeListeners.forEach(cb => cb(type, id));
 }
 
-// Hashlash funksiyasi (Endi bu funksiya eksport qilinadi)
+// Hashlash funksiyasi
 function hashPIN(pin, salt) {
   if (!salt) salt = crypto.randomBytes(16).toString('hex');
   const hash = crypto.pbkdf2Sync(pin, salt, 1000, 64, 'sha512').toString('hex');
@@ -34,6 +34,17 @@ function hashPIN(pin, salt) {
 
 function initDB() {
   try {
+    // --- MIGRATSIYA: Eski SMS jadvalini tekshirish va yangilash ---
+    const smsTableExists = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='sms_templates'").get();
+    if (smsTableExists) {
+        const columns = db.prepare("PRAGMA table_info(sms_templates)").all();
+        // Agar 'content' ustuni yo'q bo'lsa (demak eski versiya), jadvalni o'chiramiz
+        if (!columns.some(c => c.name === 'content')) {
+            db.prepare("DROP TABLE sms_templates").run();
+            console.log("♻️ Eski SMS jadvali o'chirildi va yangisi yaratiladi.");
+        }
+    }
+
     // 1. Zallar va Stollar
     db.prepare(`CREATE TABLE IF NOT EXISTS halls (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL)`).run();
     db.prepare(`
@@ -167,7 +178,7 @@ function initDB() {
     // 8. Oshxona
     db.prepare(`CREATE TABLE IF NOT EXISTS kitchens (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, printer_ip TEXT, printer_port INTEGER DEFAULT 9100, printer_type TEXT DEFAULT 'driver')`).run();
 
-    // 9. SMS
+    // 9. SMS (Yangi to'g'ri struktura)
     db.prepare(`
         CREATE TABLE IF NOT EXISTS sms_templates (
             id INTEGER PRIMARY KEY AUTOINCREMENT, 
@@ -206,24 +217,24 @@ function initDB() {
 
     // --- SEEDING (Adminni tiklash) ---
     const adminUser = db.prepare("SELECT * FROM users WHERE role = 'admin'").get();
-    const { salt, hash } = hashPIN('1111'); // Parol: 1111
+    const { salt, hash } = hashPIN('1111'); 
 
     if (!adminUser) {
         db.prepare("INSERT INTO users (name, pin, role, salt) VALUES ('Admin', ?, 'admin', ?)").run(hash, salt);
         console.log("✅ Yangi Admin yaratildi (PIN: 1111)");
     } else {
-        // Admin parolini 1111 ga qayta tiklash
         db.prepare("UPDATE users SET pin = ?, salt = ? WHERE id = ?").run(hash, salt, adminUser.id);
         console.log("♻️ Admin paroli 1111 ga qayta tiklandi.");
     }
 
-    // Default SMS Shablonlari
+    // Default SMS Shablonlari (Agar jadval bo'sh bo'lsa)
     const templateCount = db.prepare('SELECT count(*) as count FROM sms_templates').get().count;
     if (templateCount === 0) {
         const insert = db.prepare('INSERT INTO sms_templates (type, title, content) VALUES (?, ?, ?)');
         insert.run('debt_reminder', 'Qarz Eslatmasi', 'Hurmatli {name}, sizning {amount} so\'m qarzingiz muddati keldi. Iltimos, to\'lovni amalga oshiring.');
         insert.run('new_menu', 'Yangi Menyular', 'Assalomu alaykum {name}! Bizda yangi ajoyib taomlar bor. Tatib ko\'rishga taklif qilamiz!');
         insert.run('birthday', 'Tug\'ilgan Kun', 'Hurmatli {name}, tug\'ilgan kuningiz bilan tabriklaymiz! Siz uchun bugun maxsus chegirmamiz bor.');
+        console.log("✅ SMS shablonlari yaratildi.");
     }
 
     log.info("Bazalar tekshirildi va yuklandi.");
@@ -234,5 +245,4 @@ function initDB() {
   }
 }
 
-// hashPIN eksportga qo'shildi
 module.exports = { db, initDB, onChange, notify, hashPIN };

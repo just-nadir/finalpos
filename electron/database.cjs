@@ -72,7 +72,7 @@ function initDB() {
         category_id INTEGER,
         name TEXT NOT NULL,
         price REAL NOT NULL,
-        destination TEXT, 
+        destination TEXT DEFAULT '1', 
         is_active INTEGER DEFAULT 1,
         FOREIGN KEY(category_id) REFERENCES categories(id)
       )
@@ -221,8 +221,12 @@ function initDB() {
     // 2. Products jadvali uchun (XATOLIKNI TUZATUVCHI QISM)
     const productCols = db.prepare("PRAGMA table_info(products)").all();
     if (!productCols.some(c => c.name === 'destination')) {
-        db.prepare("ALTER TABLE products ADD COLUMN destination TEXT").run();
+        db.prepare("ALTER TABLE products ADD COLUMN destination TEXT DEFAULT '1'").run();
         console.log("✅ 'destination' ustuni products jadvaliga qo'shildi.");
+        
+        // MUHIM: Eski mahsulotlar uchun default destination qo'yish
+        db.prepare("UPDATE products SET destination = '1' WHERE destination IS NULL").run();
+        console.log("🔄 Eski mahsulotlarga default destination biriktirildi.");
     }
     if (!productCols.some(c => c.name === 'is_active')) {
         db.prepare("ALTER TABLE products ADD COLUMN is_active INTEGER DEFAULT 1").run();
@@ -246,6 +250,31 @@ function initDB() {
     if (!checkNumberSetting) {
         db.prepare("INSERT INTO settings (key, value) VALUES ('next_check_number', '1')").run();
         console.log("✅ 'next_check_number' sozlamasi yaratildi (boshlang'ich qiymat: 1)");
+    }
+
+    // --- YANGI SEEDING: Default Oshxonalar yaratish ---
+    const kitchenCount = db.prepare('SELECT COUNT(*) as count FROM kitchens').get().count;
+    if (kitchenCount === 0) {
+        const insertKitchen = db.prepare('INSERT INTO kitchens (name, printer_ip, printer_type) VALUES (?, ?, ?)');
+        
+        // Test uchun Microsoft Print to PDF
+        insertKitchen.run('Issiq Oshxona', 'Microsoft Print to PDF', 'driver');
+        insertKitchen.run('Bar', 'Microsoft Print to PDF', 'driver');
+        insertKitchen.run('Sovuq Oshxona', 'Microsoft Print to PDF', 'driver');
+        
+        console.log("✅ Default oshxonalar yaratildi (Test: Microsoft Print to PDF)");
+        console.log("💡 Haqiqiy muhitda ularni sozlamalarda o'zgartiring!");
+    }
+
+    // --- YANGI: Eski mahsulotlarning destination qiymatini tekshirish ---
+    const nullDestProducts = db.prepare("SELECT COUNT(*) as count FROM products WHERE destination IS NULL OR destination = ''").get().count;
+    if (nullDestProducts > 0) {
+        // Birinchi oshxonani default qilish
+        const firstKitchen = db.prepare("SELECT id FROM kitchens ORDER BY id ASC LIMIT 1").get();
+        const defaultDestination = firstKitchen ? String(firstKitchen.id) : '1';
+        
+        db.prepare(`UPDATE products SET destination = ? WHERE destination IS NULL OR destination = ''`).run(defaultDestination);
+        console.log(`🔄 ${nullDestProducts} ta mahsulotga default destination (${defaultDestination}) biriktirildi.`);
     }
 
     // Default SMS Shablonlari

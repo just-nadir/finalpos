@@ -1,5 +1,6 @@
 const { BrowserWindow } = require('electron');
 const { db } = require('../database.cjs');
+const log = require('electron-log');
 
 // Sozlamalarni olish
 function getSettings() {
@@ -309,22 +310,55 @@ module.exports = {
         await printHtml(fullHtml, printerName);
     },
 
-    // 3. Oshxona Cheki (Runner)
+    // 3. MUSTAHKAMLANGAN: Oshxona Cheki (Runner) - Fallback mexanizmi bilan
     printKitchenTicket: async (items, tableName, checkNumber, waiterName) => {
-        const kitchens = db.prepare('SELECT * FROM kitchens').all();
-        
-        const groupedItems = {};
-        items.forEach(item => {
-            const dest = item.destination || 'default';
-            if (!groupedItems[dest]) groupedItems[dest] = [];
-            groupedItems[dest].push(item);
-        });
-
-        for (const [kitchenId, kitchenItems] of Object.entries(groupedItems)) {
-            const kitchen = kitchens.find(k => String(k.id) === kitchenId);
+        try {
+            const kitchens = db.prepare('SELECT * FROM kitchens').all();
             
-            if (kitchen && kitchen.printer_ip) {
-                console.log(`👨‍🍳 Oshxonaga yuborilmoqda: ${kitchen.name}`);
+            if (!kitchens || kitchens.length === 0) {
+                log.error("❌ Oshxonalar bazada topilmadi! Printer ishlamaydi.");
+                return;
+            }
+
+            // Default fallback oshxonani aniqlash (birinchi printer_ip bo'lgan oshxona)
+            const defaultKitchen = kitchens.find(k => k.printer_ip) || kitchens[0];
+            
+            const groupedItems = {};
+            items.forEach(item => {
+                const dest = item.destination || 'default';
+                if (!groupedItems[dest]) groupedItems[dest] = [];
+                groupedItems[dest].push(item);
+            });
+
+            // Har bir oshxona uchun chop etish
+            for (const [kitchenId, kitchenItems] of Object.entries(groupedItems)) {
+                const kitchen = kitchens.find(k => String(k.id) === String(kitchenId));
+                
+                // FALLBACK LOGIKA: Agar oshxona topilmasa yoki printer yo'q bo'lsa
+                let targetKitchen = kitchen;
+                let fallbackUsed = false;
+
+                if (!kitchen) {
+                    log.warn(`⚠️ Oshxona topilmadi (ID: ${kitchenId}), default oshxonaga yuborilmoqda`);
+                    targetKitchen = defaultKitchen;
+                    fallbackUsed = true;
+                } else if (!kitchen.printer_ip) {
+                    log.warn(`⚠️ Printer IP mavjud emas (${kitchen.name}), default printerga yuborilmoqda`);
+                    targetKitchen = defaultKitchen;
+                    fallbackUsed = true;
+                }
+
+                // Agar hali ham printer topilmasa, skip qilamiz
+                if (!targetKitchen || !targetKitchen.printer_ip) {
+                    log.error(`❌ JIDDIY: Hech qanday ishlaydigan printer topilmadi! Taomlar: ${kitchenItems.map(i => i.name).join(', ')}`);
+                    continue;
+                }
+
+                const kitchenName = fallbackUsed 
+                    ? `${targetKitchen.name} (FALLBACK)` 
+                    : targetKitchen.name;
+
+                log.info(`👨‍🍳 Oshxonaga yuborilmoqda: ${kitchenName} - ${kitchenItems.length} ta taom`);
 
                 const itemsHtml = kitchenItems.map(item => `
                     <tr>
@@ -333,9 +367,16 @@ module.exports = {
                     </tr>
                 `).join('');
 
+                const warningBanner = fallbackUsed ? `
+                    <div style="background: #ffcc00; color: #000; text-align: center; padding: 5px; margin-bottom: 5px; font-weight: bold;">
+                        ⚠️ DEFAULT PRINTER
+                    </div>
+                ` : '';
+
                 const content = `
+                    ${warningBanner}
                     <div class="text-center">
-                        <div class="header-title" style="background: #000; color: #fff; padding: 5px; display: block;">${kitchen.name.toUpperCase()}</div>
+                        <div class="header-title" style="background: #000; color: #fff; padding: 5px; display: block;">${kitchenName.toUpperCase()}</div>
                     </div>
                     
                     <div class="mb-1"></div>
@@ -367,10 +408,28 @@ module.exports = {
                 `;
 
                 const fullHtml = createHtmlTemplate(content);
-                await printHtml(fullHtml, kitchen.printer_ip);
-            } else {
-                console.log(`⚠️ Oshxona topilmadi yoki Printer sozlanmagan. ID: ${kitchenId}`);
+                
+                try {
+                    await printHtml(fullHtml, targetKitchen.printer_ip);
+                    log.info(`✅ ${kitchenName}ga muvaffaqiyatli yuborildi`);
+                } catch (printErr) {
+                    log.error(`❌ ${kitchenName} printerida xato:`, printErr);
+                    
+                    // Agar fallback ham ishlamasa, oxirgi urinish - default printerga
+                    if (!fallbackUsed && defaultKitchen && defaultKitchen.printer_ip !== targetKitchen.printer_ip) {
+                        log.warn(`🔄 Oxirgi urinish: Default printerga (${defaultKitchen.name})`);
+                        try {
+                            await printHtml(fullHtml, defaultKitchen.printer_ip);
+                            log.info(`✅ Default printerda muvaffaqiyatli!`);
+                        } catch (lastErr) {
+                            log.error(`❌ Default printer ham ishlamadi:`, lastErr);
+                        }
+                    }
+                }
             }
+        } catch (err) {
+            log.error("❌ printKitchenTicket umumiy xatosi:", err);
+            throw err;
         }
     }
 };

@@ -18,6 +18,17 @@ function getOrCreateCheckNumber(tableId) {
     return nextNum;
 }
 
+// YANGI: Default oshxonani olish
+function getDefaultKitchen() {
+    try {
+        const firstKitchen = db.prepare('SELECT id FROM kitchens ORDER BY id ASC LIMIT 1').get();
+        return firstKitchen ? String(firstKitchen.id) : '1';
+    } catch (err) {
+        log.error("Default oshxonani olishda xato:", err);
+        return '1';
+    }
+}
+
 module.exports = {
   getTableItems: (id) => db.prepare('SELECT * FROM order_items WHERE table_id = ?').all(id),
 
@@ -53,7 +64,7 @@ module.exports = {
     }
   },
 
-  // 2. MOBIL OFITSIANT
+  // 2. MOBIL OFITSIANT (SERVER-SIDE VALIDATION QILINDI)
   addBulkItems: (tableId, items, waiterId) => {
     try {
         let checkNumber = 0;
@@ -71,10 +82,47 @@ module.exports = {
 
            let additionalTotal = 0;
            const insertStmt = db.prepare(`INSERT INTO order_items (table_id, product_name, price, quantity, destination) VALUES (?, ?, ?, ?, ?)`);
+           
+           // SERVER-SIDE VALIDATION: Products jadvalidan haqiqiy destination olish
+           const productStmt = db.prepare('SELECT destination FROM products WHERE name = ?');
+           const validatedItems = [];
 
            for (const item of itemsList) {
-               insertStmt.run(tableId, item.name, item.price, item.qty, item.destination);
+               // Frontenddan kelgan destination ni ishonmaymiz, bazadan tekshiramiz
+               let actualDestination = item.destination;
+               
+               try {
+                   const product = productStmt.get(item.name);
+                   if (product && product.destination) {
+                       actualDestination = product.destination;
+                       
+                       // Agar frontend eski ma'lumot yuborgan bo'lsa, logga yozamiz
+                       if (item.destination !== actualDestination) {
+                           log.warn(`🔄 Destination o'zgardi: "${item.name}" - Old: ${item.destination} → New: ${actualDestination}`);
+                       }
+                   } else {
+                       // Agar taom bazadan topilmasa yoki destination bo'sh bo'lsa, default
+                       log.warn(`⚠️ Taom bazadan topilmadi yoki destination yo'q: "${item.name}", Default ishlatilmoqda`);
+                       actualDestination = getDefaultKitchen();
+                   }
+               } catch (dbErr) {
+                   log.error(`Taom destination olishda xato: ${item.name}`, dbErr);
+                   actualDestination = getDefaultKitchen();
+               }
+
+               // Bazaga eng yangi destination bilan yozamiz
+               insertStmt.run(tableId, item.name, item.price, item.qty, actualDestination);
                additionalTotal += (item.price * item.qty);
+               
+               // Printerga yuborish uchun validatsiya qilingan itemni saqlaymiz
+               validatedItems.push({
+                   name: item.name,
+                   product_name: item.name,
+                   price: item.price,
+                   qty: item.qty,
+                   quantity: item.qty,
+                   destination: actualDestination
+               });
            }
            
            const currentTable = db.prepare('SELECT total_amount, waiter_id, waiter_name, status FROM tables WHERE id = ?').get(tableId);
@@ -92,26 +140,31 @@ module.exports = {
                db.prepare(`UPDATE tables SET total_amount = ? WHERE id = ?`)
                  .run(newTotal, tableId);
            }
+           
+           // Validatsiya qilingan itemlarni qaytaramiz
+           return validatedItems;
         });
 
-        const res = addBulkTransaction(items);
+        const validatedItems = addBulkTransaction(items);
         notify('tables', null);
         notify('table-items', tableId);
 
-        // Printerga yuborish
+        // Printerga yuborish (VALIDATSIYA QILINGAN MA'LUMOTLAR BILAN)
         setTimeout(async () => {
             try {
                 const freshTable = db.prepare('SELECT name, waiter_name FROM tables WHERE id = ?').get(tableId);
                 const tableName = freshTable ? freshTable.name : "Stol";
                 const nameToPrint = (waiterName && waiterName !== "Noma'lum") ? waiterName : (freshTable.waiter_name || "Kassir");
 
-                await printerService.printKitchenTicket(items, tableName, checkNumber, nameToPrint);
+                log.info(`📄 Printer uchun tayyor: ${validatedItems.length} ta taom, Check #${checkNumber}`);
+                await printerService.printKitchenTicket(validatedItems, tableName, checkNumber, nameToPrint);
             } catch (printErr) {
                 log.error("Oshxona printeri xatosi:", printErr);
                 notify('printer-error', `Oshxona printeri: ${printErr.message}`);
             }
         }, 100);
-        return res;
+        
+        return validatedItems;
     } catch (err) {
         log.error("addBulkItems xatosi:", err);
         throw err;

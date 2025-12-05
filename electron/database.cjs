@@ -34,16 +34,17 @@ function hashPIN(pin, salt) {
 
 function initDB() {
   try {
-    // --- MIGRATSIYA: Eski SMS jadvalini tekshirish va yangilash ---
+    // --- MIGRATSIYA 1: Eski SMS jadvalini yangilash ---
     const smsTableExists = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='sms_templates'").get();
     if (smsTableExists) {
         const columns = db.prepare("PRAGMA table_info(sms_templates)").all();
-        // Agar 'content' ustuni yo'q bo'lsa (demak eski versiya), jadvalni o'chiramiz
         if (!columns.some(c => c.name === 'content')) {
             db.prepare("DROP TABLE sms_templates").run();
             console.log("♻️ Eski SMS jadvali o'chirildi va yangisi yaratiladi.");
         }
     }
+
+    // --- JADVALLARNI YARATISH ---
 
     // 1. Zallar va Stollar
     db.prepare(`CREATE TABLE IF NOT EXISTS halls (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL)`).run();
@@ -63,7 +64,7 @@ function initDB() {
       )
     `).run();
 
-    // 2. Kategoriyalar va Mahsulotlar
+    // 2. Kategoriyalar va Mahsulotlar (YANGILANGAN STRUKTURA)
     db.prepare(`CREATE TABLE IF NOT EXISTS categories (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL)`).run();
     db.prepare(`
       CREATE TABLE IF NOT EXISTS products (
@@ -71,8 +72,8 @@ function initDB() {
         category_id INTEGER,
         name TEXT NOT NULL,
         price REAL NOT NULL,
-        printer TEXT DEFAULT 'kitchen',
-        status TEXT DEFAULT 'active',
+        destination TEXT, 
+        is_active INTEGER DEFAULT 1,
         FOREIGN KEY(category_id) REFERENCES categories(id)
       )
     `).run();
@@ -178,7 +179,7 @@ function initDB() {
     // 8. Oshxona
     db.prepare(`CREATE TABLE IF NOT EXISTS kitchens (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, printer_ip TEXT, printer_port INTEGER DEFAULT 9100, printer_type TEXT DEFAULT 'driver')`).run();
 
-    // 9. SMS (Yangi to'g'ri struktura)
+    // 9. SMS
     db.prepare(`
         CREATE TABLE IF NOT EXISTS sms_templates (
             id INTEGER PRIMARY KEY AUTOINCREMENT, 
@@ -211,11 +212,24 @@ function initDB() {
     db.prepare(`CREATE INDEX IF NOT EXISTS idx_debt_history_customer ON debt_history(customer_id)`).run();
     db.prepare(`CREATE INDEX IF NOT EXISTS idx_customer_debts_status ON customer_debts(is_paid, due_date)`).run();
 
-    // --- MIGRATSIYALAR ---
+    // --- MIGRATSIYALAR (Yangi ustunlarni qo'shish) ---
+    
+    // 1. Users jadvali uchun
     const userCols = db.prepare(`PRAGMA table_info(users)`).all();
     if (!userCols.some(c => c.name === 'salt')) db.prepare(`ALTER TABLE users ADD COLUMN salt TEXT`).run();
 
-    // --- SEEDING (Adminni tiklash) ---
+    // 2. Products jadvali uchun (XATOLIKNI TUZATUVCHI QISM)
+    const productCols = db.prepare("PRAGMA table_info(products)").all();
+    if (!productCols.some(c => c.name === 'destination')) {
+        db.prepare("ALTER TABLE products ADD COLUMN destination TEXT").run();
+        console.log("✅ 'destination' ustuni products jadvaliga qo'shildi.");
+    }
+    if (!productCols.some(c => c.name === 'is_active')) {
+        db.prepare("ALTER TABLE products ADD COLUMN is_active INTEGER DEFAULT 1").run();
+        console.log("✅ 'is_active' ustuni products jadvaliga qo'shildi.");
+    }
+
+    // --- SEEDING: Default Admin yaratish ---
     const adminUser = db.prepare("SELECT * FROM users WHERE role = 'admin'").get();
     const { salt, hash } = hashPIN('1111'); 
 
@@ -227,7 +241,7 @@ function initDB() {
         console.log("♻️ Admin paroli 1111 ga qayta tiklandi.");
     }
 
-    // Default SMS Shablonlari (Agar jadval bo'sh bo'lsa)
+    // Default SMS Shablonlari
     const templateCount = db.prepare('SELECT count(*) as count FROM sms_templates').get().count;
     if (templateCount === 0) {
         const insert = db.prepare('INSERT INTO sms_templates (type, title, content) VALUES (?, ?, ?)');

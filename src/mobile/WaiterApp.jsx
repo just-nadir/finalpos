@@ -11,7 +11,7 @@ import { useCart } from '../hooks/useCart';
 import { useMenu } from '../hooks/useMenu';
 import MobilePinLogin from './MobilePinLogin'; 
 import ConfirmModal from '../components/ConfirmModal';
-import { CONFIG, ERROR_MESSAGES } from '@constants/config';
+
 
 const WaiterApp = () => {
   const [user, setUser] = useState(null); 

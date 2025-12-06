@@ -1,151 +1,151 @@
-const { db, notify } = require('../database.cjs');
-const axios = require('axios');
-const FormData = require('form-data');
+const { db } = require('../database.cjs');
+const { sendSMS, resetToken } = require('../services/smsService.cjs');
 const log = require('electron-log');
 
-// Tokenni xotirada ushlab turamiz
-let ESKIZ_TOKEN = null;
-
-// Sozlamalarni olish (Database yordamchi)
+// ============================================
+// YORDAMCHI FUNKSIYA - Sozlamalarni olish
+// ============================================
 const getSetting = (key) => {
     const row = db.prepare('SELECT value FROM settings WHERE key = ?').get(key);
     return row ? row.value : null;
 };
 
-// 1. Eskiz.uz Login
-const loginEskiz = async () => {
-    const email = getSetting('eskiz_email');
-    const password = getSetting('eskiz_password');
+// ============================================
+// CONTROLLER FUNKSIYALARI
+// ============================================
 
-    if (!email || !password) {
-        log.warn("SMS: Eskiz login/parol sozlanmagan.");
-        return null;
-    }
-
+/**
+ * SMS sozlamalarini saqlash
+ * @param {Object} data - {eskiz_email, eskiz_password, eskiz_nickname}
+ * @returns {{success: boolean}}
+ */
+const saveSettings = (data) => {
     try {
-        const formData = new FormData();
-        formData.append('email', email);
-        formData.append('password', password);
-
-        const res = await axios.post('https://notify.eskiz.uz/api/auth/login', formData, {
-            headers: formData.getHeaders()
-        });
-
-        if (res.data && res.data.data && res.data.data.token) {
-            ESKIZ_TOKEN = res.data.data.token;
-            log.info("SMS: Token yangilandi.");
-            return ESKIZ_TOKEN;
-        }
-    } catch (err) {
-        log.error("SMS Login Error:", err.message);
-        return null;
-    }
-};
-
-// 2. Yagona SMS yuborish
-const sendOneSMS = async (phone, message, type = 'manual') => {
-    // --- TUZATISH: Telefon raqamni formatlash ---
-    let cleanPhone = phone.replace(/\D/g, ''); // Faqat raqamlarni qoldirish
-    if (cleanPhone.length === 9) {
-        cleanPhone = '998' + cleanPhone; // 998 ni qo'shish
-    }
-
-    if (cleanPhone.length !== 12) {
-        return { success: false, error: `Raqam noto'g'ri: ${cleanPhone} (12 ta raqam bo'lishi kerak)` };
-    }
-
-    // --- TUZATISH: Nickname ni sozlamadan olish ---
-    const nickname = getSetting('eskiz_nickname') || '4546';
-
-    if (!ESKIZ_TOKEN) await loginEskiz();
-    if (!ESKIZ_TOKEN) return { success: false, error: "Avtorizatsiya xatosi (Login qilinmadi)" };
-
-    try {
-        const formData = new FormData();
-        formData.append('mobile_phone', cleanPhone);
-        formData.append('message', message);
-        formData.append('from', nickname); 
-
-        const res = await axios.post('https://notify.eskiz.uz/api/message/sms/send', formData, {
-            headers: {
-                ...formData.getHeaders(),
-                'Authorization': `Bearer ${ESKIZ_TOKEN}`
-            }
-        });
-
-        const status = 'sent';
-        db.prepare('INSERT INTO sms_logs (phone, message, status, date, type) VALUES (?, ?, ?, ?, ?)').run(cleanPhone, message, status, new Date().toISOString(), type);
-        
-        return { success: true, data: res.data };
-
-    } catch (err) {
-        // Token eskirgan bo'lsa, qayta urinib ko'rish
-        if (err.response && err.response.status === 401) {
-            log.info("SMS: Token eskirgan, yangilanmoqda...");
-            ESKIZ_TOKEN = null;
-            return sendOneSMS(phone, message, type);
-        }
-
-        const status = 'failed';
-        db.prepare('INSERT INTO sms_logs (phone, message, status, date, type) VALUES (?, ?, ?, ?, ?)').run(cleanPhone, message, status, new Date().toISOString(), type);
-        
-        // --- TUZATISH: Aniq xatoni log qilish ---
-        const errorDetail = err.response?.data?.message || err.message;
-        log.error("SMS Send Error:", errorDetail);
-        if (err.response?.data) log.error("Eskiz Response:", JSON.stringify(err.response.data));
-
-        return { success: false, error: errorDetail };
-    }
-};
-
-module.exports = {
-    // Sozlamalarni saqlash
-    saveSettings: (data) => {
         const stmt = db.prepare('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)');
         const update = db.transaction((settings) => {
-            for (const [key, value] of Object.entries(settings)) stmt.run(key, String(value));
+            for (const [key, value] of Object.entries(settings)) {
+                stmt.run(key, String(value));
+            }
         });
         update(data);
-        ESKIZ_TOKEN = null; // Sozlama o'zgarsa tokenni yangilash uchun null qilamiz
-        return { success: true };
-    },
-
-    // Sozlamalarni o'qish
-    getSettings: () => {
-        const email = getSetting('eskiz_email');
-        const nickname = getSetting('eskiz_nickname');
-        return { email: email || '', eskiz_nickname: nickname || '4546' };
-    },
-
-    // Shablonlarni olish
-    getTemplates: () => db.prepare('SELECT * FROM sms_templates').all(),
-    
-    // Shablonni yangilash
-    updateTemplate: (type, text) => {
-        db.prepare('UPDATE sms_templates SET content = ? WHERE type = ?').run(text, type);
-        return { success: true };
-    },
-
-    // Tarixni olish
-    getHistory: () => {
-        return db.prepare('SELECT * FROM sms_logs ORDER BY id DESC LIMIT 100').all();
-    },
-
-    // Ommaviy yuborish
-    sendBroadcast: async (message) => {
-        const customers = db.prepare('SELECT phone FROM customers').all();
-        let sentCount = 0;
         
-        for (const c of customers) {
-            if (c.phone) {
-                // Rate limit (sekundiga 2-3 ta sms)
-                await new Promise(r => setTimeout(r, 500)); 
-                const res = await sendOneSMS(c.phone, message, 'news');
-                if (res.success) sentCount++;
+        // Token bekor qilish (sozlamalar o'zgardi)
+        resetToken();
+        
+        log.info("SMS Controller: Sozlamalar saqlandi");
+        return { success: true };
+    } catch (error) {
+        log.error("SMS Controller: Sozlamalarni saqlashda xato:", error.message);
+        return { success: false, error: error.message };
+    }
+};
+
+/**
+ * SMS sozlamalarini o'qish
+ * @returns {{email: string, eskiz_nickname: string}}
+ */
+const getSettings = () => {
+    const email = getSetting('eskiz_email') || '';
+    const nickname = getSetting('eskiz_nickname') || '4546';
+    return { email, eskiz_nickname: nickname };
+};
+
+/**
+ * SMS shablonlarini olish
+ * @returns {Array}
+ */
+const getTemplates = () => {
+    return db.prepare('SELECT * FROM sms_templates').all();
+};
+
+/**
+ * SMS shablonini yangilash
+ * @param {string} type - Shablon turi (birthday, debt_reminder, news)
+ * @param {string} text - Shablon matni
+ * @returns {{success: boolean}}
+ */
+const updateTemplate = (type, text) => {
+    try {
+        db.prepare('UPDATE sms_templates SET content = ? WHERE type = ?').run(text, type);
+        log.info(`SMS Controller: Shablon yangilandi - ${type}`);
+        return { success: true };
+    } catch (error) {
+        log.error("SMS Controller: Shablonni yangilashda xato:", error.message);
+        return { success: false, error: error.message };
+    }
+};
+
+/**
+ * SMS tarixini olish (oxirgi 100 ta)
+ * @returns {Array}
+ */
+const getHistory = () => {
+    return db.prepare('SELECT * FROM sms_logs ORDER BY id DESC LIMIT 100').all();
+};
+
+/**
+ * Ommaviy SMS yuborish (Barcha mijozlarga)
+ * @param {string} message - Yuborilishi kerak bo'lgan SMS matni
+ * @returns {Promise<{success: boolean, count: number, failed?: number}>}
+ */
+const sendBroadcast = async (message) => {
+    try {
+        const customers = db.prepare('SELECT phone, name FROM customers WHERE phone IS NOT NULL AND phone != ""').all();
+        
+        let sentCount = 0;
+        let failedCount = 0;
+        const totalCustomers = customers.length;
+
+        log.info(`SMS Controller: Ommaviy yuborish boshlandi - ${totalCustomers} ta mijoz`);
+
+        for (const customer of customers) {
+            // Rate limiting: sekundiga 2 ta SMS (500ms kutish)
+            await new Promise(resolve => setTimeout(resolve, 500));
+            
+            const result = await sendSMS(customer.phone, message, 'news');
+            
+            if (result.success) {
+                sentCount++;
+            } else {
+                failedCount++;
+                log.warn(`SMS Controller: Xato - ${customer.name} (${customer.phone}): ${result.error}`);
             }
         }
-        return { success: true, count: sentCount };
-    },
 
-    sendSMS: sendOneSMS
+        log.info(`SMS Controller: Ommaviy yuborish tugadi - Yuborildi: ${sentCount}, Xato: ${failedCount}`);
+        
+        return { 
+            success: true, 
+            count: sentCount,
+            failed: failedCount,
+            total: totalCustomers
+        };
+    } catch (error) {
+        log.error("SMS Controller: Ommaviy yuborishda xato:", error.message);
+        return { success: false, error: error.message };
+    }
+};
+
+/**
+ * Bitta SMS yuborish (Frontend uchun)
+ * @param {string} phone - Telefon raqam
+ * @param {string} message - SMS matni
+ * @param {string} type - SMS turi (default: manual)
+ * @returns {Promise<{success: boolean, data?: any, error?: string}>}
+ */
+const sendOne = async (phone, message, type = 'manual') => {
+    return await sendSMS(phone, message, type);
+};
+
+// ============================================
+// EKSPORT
+// ============================================
+module.exports = {
+    saveSettings,
+    getSettings,
+    getTemplates,
+    updateTemplate,
+    getHistory,
+    sendBroadcast,
+    sendSMS: sendOne // IPC uchun alias
 };

@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Plus, Trash2, Power, X, ChefHat } from 'lucide-react';
+import { Plus, Trash2, Power, X, ChefHat, Edit2 } from 'lucide-react';
 import ConfirmModal from './ConfirmModal';
 
 const ProductModal = ({ isOpen, onClose, onSubmit, newProduct, setNewProduct, categories, kitchens }) => {
@@ -60,8 +60,15 @@ const MenuManagement = () => {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [newProduct, setNewProduct] = useState({ name: '', price: '', category_id: '', destination: '1' });
 
-  // Delete Modal State
+  // Kategoriya tahrirlash uchun
+  const [editingCategoryId, setEditingCategoryId] = useState(null);
+  const [editCategoryName, setEditCategoryName] = useState('');
+
+  // Delete Modal State (mahsulotlar uchun)
   const [confirmModal, setConfirmModal] = useState({ isOpen: false, id: null });
+
+  // Delete Modal State (kategoriyalar uchun)
+  const [confirmCategoryDelete, setConfirmCategoryDelete] = useState({ isOpen: false, id: null });
 
   const loadData = async () => {
     if (!window.electron) return;
@@ -89,6 +96,42 @@ const MenuManagement = () => {
       await ipcRenderer.invoke('add-category', newCategoryName);
       setNewCategoryName('');
       setIsAddingCategory(false);
+      loadData();
+    } catch (err) { console.error(err); }
+  };
+
+  const startEditCategory = (cat) => {
+    setEditingCategoryId(cat.id);
+    setEditCategoryName(cat.name);
+  };
+
+  const handleUpdateCategory = async (e) => {
+    e.preventDefault();
+    if (!editCategoryName.trim()) return;
+    try {
+      const { ipcRenderer } = window.electron;
+      await ipcRenderer.invoke('update-category', { id: editingCategoryId, name: editCategoryName });
+      setEditingCategoryId(null);
+      setEditCategoryName('');
+      loadData();
+    } catch (err) { console.error(err); }
+  };
+
+  const confirmDeleteCategory = (id) => {
+    setConfirmCategoryDelete({ isOpen: true, id });
+  };
+
+  const performDeleteCategory = async () => {
+    try {
+      const { ipcRenderer } = window.electron;
+      await ipcRenderer.invoke('delete-category', confirmCategoryDelete.id);
+      
+      // Agar o'chirilayotgan kategoriya active bo'lsa, boshqa kategoriyaga o'tkazish
+      if (activeCategory === confirmCategoryDelete.id) {
+        const remaining = categories.filter(c => c.id !== confirmCategoryDelete.id);
+        setActiveCategory(remaining.length > 0 ? remaining[0].id : null);
+      }
+      
       loadData();
     } catch (err) { console.error(err); }
   };
@@ -146,10 +189,68 @@ const MenuManagement = () => {
 
         <div className="flex-1 overflow-y-auto p-3 space-y-1">
           {categories.map(cat => (
-            <button key={cat.id} onClick={() => setActiveCategory(cat.id)}
-              className={`w-full text-left px-4 py-3 rounded-xl font-medium transition-colors flex justify-between items-center ${activeCategory === cat.id ? 'bg-blue-600 text-white shadow-md' : 'text-gray-600 hover:bg-gray-100'}`}>
-              {cat.name}
-            </button>
+            <div key={cat.id} className="relative group">
+              {editingCategoryId === cat.id ? (
+                // Tahrirlash rejimi
+                <form onSubmit={handleUpdateCategory} className="w-full bg-blue-50 px-3 py-2 rounded-xl border border-blue-300 animate-in slide-in-from-top">
+                  <input 
+                    autoFocus 
+                    type="text" 
+                    value={editCategoryName} 
+                    onChange={(e) => setEditCategoryName(e.target.value)} 
+                    className="w-full p-2 rounded-lg border border-gray-300 mb-2 text-sm"
+                    placeholder="Kategoriya nomi"
+                  />
+                  <div className="flex gap-2">
+                    <button 
+                      type="button" 
+                      onClick={() => setEditingCategoryId(null)} 
+                      className="text-xs text-gray-500 py-1 flex-1"
+                    >
+                      Bekor
+                    </button>
+                    <button 
+                      type="submit" 
+                      className="text-xs bg-blue-600 text-white py-1 rounded-md flex-1"
+                    >
+                      Saqlash
+                    </button>
+                  </div>
+                </form>
+              ) : (
+                // Oddiy ko'rinish
+                <div 
+                  onClick={() => setActiveCategory(cat.id)}
+                  className={`w-full px-4 py-3 rounded-xl font-medium transition-all cursor-pointer flex items-center justify-between ${activeCategory === cat.id ? 'bg-blue-600 text-white shadow-md' : 'text-gray-600 hover:bg-gray-100'}`}
+                >
+                  <span className="flex-1 text-left truncate">{cat.name}</span>
+                  
+                  {/* Tahrirlash va O'chirish tugmalari */}
+                  <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        startEditCategory(cat);
+                      }}
+                      className={`p-1.5 rounded-md transition-colors ${activeCategory === cat.id ? 'hover:bg-blue-500' : 'hover:bg-gray-200'}`}
+                      title="Tahrirlash"
+                    >
+                      <Edit2 size={14} />
+                    </button>
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        confirmDeleteCategory(cat.id);
+                      }}
+                      className={`p-1.5 rounded-md transition-colors ${activeCategory === cat.id ? 'hover:bg-red-500' : 'hover:bg-red-100 hover:text-red-600'}`}
+                      title="O'chirish"
+                    >
+                      <Trash2 size={14} />
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
           ))}
         </div>
       </div>
@@ -184,11 +285,20 @@ const MenuManagement = () => {
 
       <ProductModal isOpen={isModalOpen} onClose={() => setIsModalOpen(false)} onSubmit={handleAddProduct} newProduct={newProduct} setNewProduct={setNewProduct} categories={categories} kitchens={kitchens} />
       
+      {/* Mahsulot o'chirish tasdiqlash */}
       <ConfirmModal 
         isOpen={confirmModal.isOpen}
         onClose={() => setConfirmModal({ ...confirmModal, isOpen: false })}
         onConfirm={performDelete}
         message="Taomni o'chirmoqchimisiz?"
+      />
+
+      {/* Kategoriya o'chirish tasdiqlash */}
+      <ConfirmModal 
+        isOpen={confirmCategoryDelete.isOpen}
+        onClose={() => setConfirmCategoryDelete({ ...confirmCategoryDelete, isOpen: false })}
+        onConfirm={performDeleteCategory}
+        message="Kategoriyani va unga tegishli barcha mahsulotlarni o'chirmoqchimisiz?"
       />
     </div>
   );

@@ -6,6 +6,26 @@ module.exports = {
   addCategory: (name) => {
       const res = db.prepare('INSERT INTO categories (name) VALUES (?)').run(name);
       notify('products', null);
+      notify('categories', null);
+      return res;
+  },
+
+  updateCategory: (id, name) => {
+      const res = db.prepare('UPDATE categories SET name = ? WHERE id = ?').run(name, id);
+      notify('products', null);
+      notify('categories', null);
+      return res;
+  },
+
+  deleteCategory: (id) => {
+      // O'chirish mantiq: avval kategoriyaga tegishli barcha mahsulotlarni o'chirish
+      db.prepare('DELETE FROM products WHERE category_id = ?').run(id);
+      
+      // Keyin kategoriyani o'chirish
+      const res = db.prepare('DELETE FROM categories WHERE id = ?').run(id);
+      
+      notify('products', null);
+      notify('categories', null);
       return res;
   },
 

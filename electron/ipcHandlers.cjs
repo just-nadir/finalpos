@@ -43,6 +43,8 @@ function registerIpcHandlers(ipcMain) {
     // ==========================================
     ipcMain.handle('get-categories', () => productController.getCategories());
     ipcMain.handle('add-category', (e, name) => productController.addCategory(name));
+    ipcMain.handle('update-category', (e, { id, name }) => productController.updateCategory(id, name));
+    ipcMain.handle('delete-category', (e, id) => productController.deleteCategory(id));
 
     ipcMain.handle('get-products', () => productController.getProducts());
     ipcMain.handle('add-product', (e, product) => productController.addProduct(product));

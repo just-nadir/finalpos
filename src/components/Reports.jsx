@@ -1,17 +1,19 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { 
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, 
-  PieChart, Pie, Cell, LineChart, Line, AreaChart, Area
+  PieChart, Pie, Cell, AreaChart, Area
 } from 'recharts';
 import { 
   LayoutDashboard, Users, UtensilsCrossed, History, Calendar, 
   Download, Filter, TrendingUp, DollarSign, CreditCard, 
-  ShoppingBag, Search, ChevronRight, ArrowUpRight, ArrowDownRight 
+  ShoppingBag
 } from 'lucide-react';
+import { ipcCall } from '@utils/ipc';
+import { formatCurrency, formatDate } from '@utils/formatters';
+import LoadingSpinner from './common/LoadingSpinner';
 
-const COLORS = ['#3B82F6', '#10B981', '#F59E0B', '#EF4444', '#8B5CF6']; // Moviy, Yashil, Sariq, Qizil, Binafsha
+const COLORS = ['#3B82F6', '#10B981', '#F59E0B', '#EF4444', '#8B5CF6'];
 
-// YANGI: Bugungi sanani olish funksiyasi
 const getTodayDate = () => {
   const today = new Date();
   const year = today.getFullYear();
@@ -21,43 +23,37 @@ const getTodayDate = () => {
 };
 
 const Reports = () => {
-  const [activeTab, setActiveTab] = useState('dashboard'); // dashboard, staff, products, history
+  const [activeTab, setActiveTab] = useState('dashboard');
   const [salesData, setSalesData] = useState([]);
   const [loading, setLoading] = useState(false);
   
-  // YANGILANDI: Default qiymat har safar bugungi sana
   const [dateRange, setDateRange] = useState({
     startDate: getTodayDate(),
     endDate: getTodayDate()
   });
 
-  // --- DATA LOADING ---
-  useEffect(() => {
-    loadData();
-  }, [dateRange]);
-
-  const loadData = async () => {
-    if (!window.electron) return;
+  const loadData = useCallback(async () => {
     setLoading(true);
     try {
-      const { ipcRenderer } = window.electron;
-      // Kun oxirigacha bo'lgan vaqtni qamrab olish
       const range = {
         startDate: `${dateRange.startDate}T00:00:00.000Z`,
         endDate: `${dateRange.endDate}T23:59:59.999Z`
       };
       
-      const data = await ipcRenderer.invoke('get-sales', range);
+      const data = await ipcCall('get-sales', range);
       setSalesData(data || []);
     } catch (err) { 
-      console.error(err); 
+      console.error('Savdolarni yuklashda xato:', err);
     } finally {
       setLoading(false);
     }
-  };
+  }, [dateRange]);
 
-  // --- EXPORT TO CSV ---
-  const exportToCSV = () => {
+  useEffect(() => {
+    loadData();
+  }, [loadData]);
+
+  const exportToCSV = useCallback(() => {
     if (salesData.length === 0) return;
 
     let headers = "ID,Sana,Vaqt,Stol,Ofitsiant,Mehmonlar,To'lov Turi,Summa\n";
@@ -65,9 +61,9 @@ const Reports = () => {
       const date = new Date(sale.date);
       return [
         sale.check_number || sale.id,
-        date.toLocaleDateString(),
+        formatDate(sale.date),
         date.toLocaleTimeString(),
-        `"${sale.items_json ? JSON.parse(sale.items_json)[0]?.destination || 'Stol' : 'Stol'}"`, // Stol raqami json ichida bo'lmasa oddiy
+        `"Stol"`,
         `"${sale.waiter_name || 'Kassir'}"`,
         sale.guest_count || 0,
         sale.payment_method,
@@ -83,9 +79,9 @@ const Reports = () => {
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
-  };
+  }, [salesData, dateRange]);
 
-  // --- ANALYTICS CALCULATIONS (useMemo for performance) ---
+  // OPTIMIZED: useMemo bilan analytics (heavy computation)
   const stats = useMemo(() => {
     let totalRevenue = 0;
     let totalOrders = salesData.length;
@@ -98,25 +94,21 @@ const Reports = () => {
       const amount = sale.total_amount || 0;
       totalRevenue += amount;
 
-      // Xizmat haqi (Service Charge) ni hisoblash
-      // Formula: Service = Total - Subtotal + Discount
-      const subtotal = sale.subtotal || amount; // Ehtiyot shart
+      const subtotal = sale.subtotal || amount;
       const discount = sale.discount || 0;
       const serviceCharge = amount - subtotal + discount;
 
-      // Payment Method Stats
       const method = sale.payment_method || 'naqd';
       methodMap[method] = (methodMap[method] || 0) + amount;
 
-      // Waiter Stats (Updated)
       const waiter = sale.waiter_name || "Noma'lum";
       if (!waiterMap[waiter]) {
           waiterMap[waiter] = { 
               name: waiter, 
               revenue: 0, 
               count: 0, 
-              guests: 0, // Mehmonlar soni
-              service: 0 // Xizmat haqi
+              guests: 0,
+              service: 0
           };
       }
       waiterMap[waiter].revenue += amount;
@@ -124,14 +116,12 @@ const Reports = () => {
       waiterMap[waiter].guests += (sale.guest_count || 0);
       waiterMap[waiter].service += serviceCharge;
 
-      // Hourly Stats
       const hour = new Date(sale.date).getHours();
       if (hourlyMap[hour]) {
         hourlyMap[hour].amount += amount;
         hourlyMap[hour].count += 1;
       }
 
-      // Product Stats
       try {
         const items = JSON.parse(sale.items_json || '[]');
         items.forEach(item => {
@@ -154,17 +144,13 @@ const Reports = () => {
     };
   }, [salesData]);
 
-  // --- RENDERERS ---
-
-  // 1. DASHBOARD TAB
   const renderDashboard = () => (
     <div className="space-y-6 animate-in fade-in duration-300">
-      {/* KPI Cards */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
         <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 flex justify-between items-start">
           <div>
             <p className="text-gray-400 text-sm font-bold uppercase tracking-wider">Jami Savdo</p>
-            <h3 className="text-3xl font-black text-gray-800 mt-2">{stats.totalRevenue.toLocaleString()} <span className="text-sm text-gray-400 font-normal">so'm</span></h3>
+            <h3 className="text-3xl font-black text-gray-800 mt-2">{formatCurrency(stats.totalRevenue)} <span className="text-sm text-gray-400 font-normal">so'm</span></h3>
           </div>
           <div className="p-3 bg-blue-50 text-blue-600 rounded-xl"><DollarSign size={24} /></div>
         </div>
@@ -178,15 +164,13 @@ const Reports = () => {
         <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 flex justify-between items-start">
           <div>
             <p className="text-gray-400 text-sm font-bold uppercase tracking-wider">O'rtacha Chek</p>
-            <h3 className="text-3xl font-black text-gray-800 mt-2">{stats.avgCheck.toLocaleString()} <span className="text-sm text-gray-400 font-normal">so'm</span></h3>
+            <h3 className="text-3xl font-black text-gray-800 mt-2">{formatCurrency(stats.avgCheck)} <span className="text-sm text-gray-400 font-normal">so'm</span></h3>
           </div>
           <div className="p-3 bg-orange-50 text-orange-600 rounded-xl"><TrendingUp size={24} /></div>
         </div>
       </div>
 
-      {/* Charts Section */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 h-96">
-        {/* Hourly Trend */}
         <div className="lg:col-span-2 bg-white p-6 rounded-2xl shadow-sm border border-gray-100 flex flex-col">
           <h3 className="font-bold text-gray-700 mb-6 flex items-center gap-2">
             <Calendar size={18} /> Soatbay Savdo Dinamikasi
@@ -203,14 +187,13 @@ const Reports = () => {
                 <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f0f0f0" />
                 <XAxis dataKey="hour" tickFormatter={(h) => `${h}:00`} tick={{fontSize: 12}} />
                 <YAxis tickFormatter={(val) => `${val/1000}k`} tick={{fontSize: 12}} />
-                <Tooltip formatter={(val) => val.toLocaleString() + " so'm"} labelFormatter={(label) => `${label}:00`} />
+                <Tooltip formatter={(val) => formatCurrency(val) + " so'm"} labelFormatter={(label) => `${label}:00`} />
                 <Area type="monotone" dataKey="amount" stroke="#3B82F6" fillOpacity={1} fill="url(#colorAmount)" strokeWidth={3} />
               </AreaChart>
             </ResponsiveContainer>
           </div>
         </div>
 
-        {/* Payment Methods */}
         <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 flex flex-col">
           <h3 className="font-bold text-gray-700 mb-2 flex items-center gap-2">
             <CreditCard size={18} /> To'lov Turlari
@@ -231,15 +214,14 @@ const Reports = () => {
                     <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
                   ))}
                 </Pie>
-                <Tooltip formatter={(val) => val.toLocaleString() + " so'm"} />
+                <Tooltip formatter={(val) => formatCurrency(val) + " so'm"} />
                 <Legend verticalAlign="bottom" height={36}/>
               </PieChart>
             </ResponsiveContainer>
-            {/* Center Text */}
             <div className="absolute inset-0 flex items-center justify-center pointer-events-none pb-8">
                <div className="text-center">
                  <span className="text-xs text-gray-400 font-bold block">JAMI</span>
-                 <span className="text-sm font-bold text-gray-800">{stats.totalRevenue.toLocaleString()}</span>
+                 <span className="text-sm font-bold text-gray-800">{formatCurrency(stats.totalRevenue)}</span>
                </div>
             </div>
           </div>
@@ -248,7 +230,6 @@ const Reports = () => {
     </div>
   );
 
-  // 2. STAFF TAB (YANGILANDI)
   const renderStaff = () => (
     <div className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden animate-in fade-in duration-300">
       <table className="w-full text-left">
@@ -272,8 +253,8 @@ const Reports = () => {
               </td>
               <td className="px-6 py-4 text-center text-gray-600">{w.count} ta</td>
               <td className="px-6 py-4 text-center font-bold text-blue-600">{w.guests} kishi</td>
-              <td className="px-6 py-4 text-right font-medium text-orange-600">{Math.round(w.service).toLocaleString()}</td>
-              <td className="px-6 py-4 text-right font-bold text-gray-800">{w.revenue.toLocaleString()}</td>
+              <td className="px-6 py-4 text-right font-medium text-orange-600">{formatCurrency(Math.round(w.service))}</td>
+              <td className="px-6 py-4 text-right font-bold text-gray-800">{formatCurrency(w.revenue)}</td>
             </tr>
           ))}
           {stats.waiters.length === 0 && <tr><td colSpan="5" className="p-8 text-center text-gray-400">Ma'lumot yo'q</td></tr>}
@@ -282,7 +263,6 @@ const Reports = () => {
     </div>
   );
 
-  // 3. PRODUCTS TAB
   const renderProducts = () => (
     <div className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden animate-in fade-in duration-300">
       <table className="w-full text-left">
@@ -301,7 +281,7 @@ const Reports = () => {
                 {p.name}
               </td>
               <td className="px-6 py-4 text-center text-gray-600 font-medium">{p.qty}</td>
-              <td className="px-6 py-4 text-right font-bold text-blue-600">{p.revenue.toLocaleString()}</td>
+              <td className="px-6 py-4 text-right font-bold text-blue-600">{formatCurrency(p.revenue)}</td>
             </tr>
           ))}
           {stats.products.length === 0 && <tr><td colSpan="3" className="p-8 text-center text-gray-400">Ma'lumot yo'q</td></tr>}
@@ -310,7 +290,6 @@ const Reports = () => {
     </div>
   );
 
-  // 4. HISTORY TAB
   const renderHistory = () => (
     <div className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden animate-in fade-in duration-300">
       <table className="w-full text-left">
@@ -320,7 +299,6 @@ const Reports = () => {
             <th className="px-6 py-4 font-bold text-gray-600 text-sm">Vaqt</th>
             <th className="px-6 py-4 font-bold text-gray-600 text-sm">Ofitsiant</th>
             <th className="px-6 py-4 font-bold text-gray-600 text-sm">Mehmon</th>
-            <th className="px-6 py-4 font-bold text-gray-600 text-sm">Mijoz</th>
             <th className="px-6 py-4 font-bold text-gray-600 text-sm">To'lov</th>
             <th className="px-6 py-4 font-bold text-gray-600 text-sm text-right">Summa</th>
           </tr>
@@ -331,11 +309,10 @@ const Reports = () => {
               <td className="px-6 py-4 font-mono text-gray-500 text-sm">#{sale.check_number || sale.id}</td>
               <td className="px-6 py-4 text-sm text-gray-600">
                 <div className="font-bold text-gray-800">{new Date(sale.date).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}</div>
-                <div className="text-xs text-gray-400">{new Date(sale.date).toLocaleDateString()}</div>
+                <div className="text-xs text-gray-400">{formatDate(sale.date)}</div>
               </td>
               <td className="px-6 py-4 font-medium text-gray-800">{sale.waiter_name || "Kassir"}</td>
               <td className="px-6 py-4 text-center text-sm font-bold text-blue-600">{sale.guest_count || '-'}</td>
-              <td className="px-6 py-4 text-sm text-gray-600">{sale.customer_id ? "Mijoz (ID: "+sale.customer_id+")" : "-"}</td>
               <td className="px-6 py-4">
                 <span className={`px-2 py-1 rounded text-xs font-bold uppercase
                   ${sale.payment_method === 'cash' ? 'bg-green-100 text-green-700' :
@@ -344,18 +321,17 @@ const Reports = () => {
                   {sale.payment_method || 'Naqd'}
                 </span>
               </td>
-              <td className="px-6 py-4 text-right font-black text-gray-800">{sale.total_amount?.toLocaleString()}</td>
+              <td className="px-6 py-4 text-right font-black text-gray-800">{formatCurrency(sale.total_amount)}</td>
             </tr>
           ))}
-          {salesData.length === 0 && <tr><td colSpan="7" className="p-8 text-center text-gray-400">Hech qanday savdo tarixi yo'q</td></tr>}
+          {salesData.length === 0 && <tr><td colSpan="6" className="p-8 text-center text-gray-400">Savdo tarixi yo'q</td></tr>}
         </tbody>
       </table>
     </div>
   );
 
   return (
-    <div className="flex w-full h-full bg-gray-100 font-sans">
-      {/* SIDEBAR FILTERS */}
+    <div className="flex w-full h-full bg-gray-100">
       <div className="w-80 bg-white border-r border-gray-200 flex flex-col h-full shadow-sm z-20 shrink-0">
         <div className="p-6 pb-2">
           <h2 className="text-2xl font-black text-gray-800 mb-1">Xisobotlar</h2>
@@ -381,7 +357,11 @@ const Reports = () => {
                 className="w-full p-2.5 rounded-lg border border-gray-200 text-sm font-bold text-gray-700 outline-none focus:ring-2 focus:ring-blue-500 bg-white"
               />
             </div>
-            <button onClick={loadData} disabled={loading} className="w-full mt-3 bg-gray-900 text-white py-2.5 rounded-lg text-sm font-bold hover:bg-gray-800 flex items-center justify-center gap-2 active:scale-95 transition-transform">
+            <button 
+              onClick={loadData} 
+              disabled={loading} 
+              className="w-full mt-3 bg-gray-900 text-white py-2.5 rounded-lg text-sm font-bold hover:bg-gray-800 flex items-center justify-center gap-2 active:scale-95 transition-transform disabled:opacity-50"
+            >
                {loading ? "Yuklanmoqda..." : <><Filter size={16} /> Yangilash</>}
             </button>
           </div>
@@ -403,15 +383,13 @@ const Reports = () => {
         </div>
 
         <div className="mt-auto p-4 border-t border-gray-100">
-           <button onClick={exportToCSV} className="w-full border-2 border-gray-200 text-gray-600 py-3 rounded-xl font-bold text-sm hover:bg-gray-50 hover:text-gray-800 hover:border-gray-300 flex items-center justify-center gap-2 transition-colors">
+           <button onClick={exportToCSV} disabled={salesData.length === 0} className="w-full border-2 border-gray-200 text-gray-600 py-3 rounded-xl font-bold text-sm hover:bg-gray-50 hover:text-gray-800 hover:border-gray-300 flex items-center justify-center gap-2 transition-colors disabled:opacity-50 disabled:cursor-not-allowed">
               <Download size={18} /> Excelga Yuklash
            </button>
         </div>
       </div>
 
-      {/* CONTENT AREA */}
       <div className="flex-1 flex flex-col h-screen overflow-hidden">
-        {/* Header */}
         <div className="bg-white h-20 px-8 flex items-center justify-between border-b border-gray-200 shrink-0 z-10 shadow-sm">
            <div>
               <h1 className="text-xl font-black text-gray-800 uppercase tracking-tight">
@@ -421,15 +399,14 @@ const Reports = () => {
                  {activeTab === 'history' && "Savdo Tarixi"}
               </h1>
               <p className="text-gray-400 text-xs font-bold mt-0.5 flex items-center gap-1">
-                 <Calendar size={12}/> {new Date(dateRange.startDate).toLocaleDateString()} — {new Date(dateRange.endDate).toLocaleDateString()}
+                 <Calendar size={12}/> {formatDate(dateRange.startDate)} — {formatDate(dateRange.endDate)}
               </p>
            </div>
            
-           {/* Quick Stats Summary (Optional Header Info) */}
            <div className="flex gap-6">
               <div className="text-right">
                  <p className="text-[10px] font-bold text-gray-400 uppercase">Jami Tushum</p>
-                 <p className="text-lg font-black text-blue-600">{stats.totalRevenue.toLocaleString()}</p>
+                 <p className="text-lg font-black text-blue-600">{formatCurrency(stats.totalRevenue)}</p>
               </div>
               <div className="text-right border-l border-gray-100 pl-6">
                  <p className="text-[10px] font-bold text-gray-400 uppercase">Cheklar</p>
@@ -438,12 +415,17 @@ const Reports = () => {
            </div>
         </div>
 
-        {/* Scrollable Body */}
         <div className="flex-1 overflow-y-auto p-8 pb-32">
-           {activeTab === 'dashboard' && renderDashboard()}
-           {activeTab === 'staff' && renderStaff()}
-           {activeTab === 'products' && renderProducts()}
-           {activeTab === 'history' && renderHistory()}
+           {loading ? (
+             <LoadingSpinner text="Ma'lumotlar yuklanmoqda..." />
+           ) : (
+             <>
+               {activeTab === 'dashboard' && renderDashboard()}
+               {activeTab === 'staff' && renderStaff()}
+               {activeTab === 'products' && renderProducts()}
+               {activeTab === 'history' && renderHistory()}
+             </>
+           )}
         </div>
       </div>
     </div>

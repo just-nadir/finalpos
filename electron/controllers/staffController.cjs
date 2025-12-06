@@ -1,90 +1,103 @@
-const { db, notify } = require('../database.cjs');
+const { db, notify, hashPIN } = require('../database.cjs');
+const { validate, schemas } = require('../utils/validator.cjs');
+const { AppError } = require('../utils/errorHandler.cjs');
 const log = require('electron-log');
-const crypto = require('crypto');
-
-// Yordamchi: Hashlash funksiyasi
-function hashPIN(pin, salt) {
-  if (!salt) salt = crypto.randomBytes(16).toString('hex');
-  const hash = crypto.pbkdf2Sync(pin, salt, 1000, 64, 'sha512').toString('hex');
-  return { salt, hash };
-}
 
 module.exports = {
-  getUsers: () => db.prepare('SELECT id, name, role FROM users').all(), // PINni qaytarmaymiz (xavfsizlik)
+  getUsers: () => {
+    try {
+      return db.prepare('SELECT id, name, role FROM users').all();
+    } catch (error) {
+      log.error('getUsers xatosi:', error);
+      throw error;
+    }
+  },
 
   saveUser: (user) => {
-    // PIN kod validatsiyasi (faqat raqamlar)
-    if (user.pin && !/^\d+$/.test(user.pin)) {
-        throw new Error("PIN faqat raqamlardan iborat bo'lishi kerak!");
-    }
+    try {
+      const validated = validate(schemas.user, user);
 
-    if (user.id) {
-      // Userni yangilash
-      if (user.pin) { // Agar yangi PIN kiritilgan bo'lsa
-         const { salt, hash } = hashPIN(user.pin);
-         db.prepare('UPDATE users SET name = ?, pin = ?, role = ?, salt = ? WHERE id = ?')
-           .run(user.name, hash, user.role, salt, user.id);
-      } else { // Faqat ism yoki rolni o'zgartirish
-         db.prepare('UPDATE users SET name = ?, role = ? WHERE id = ?')
-           .run(user.name, user.role, user.id);
+      if (validated.id) {
+        // Userni yangilash
+        if (validated.pin) {
+           const { salt, hash } = hashPIN(validated.pin);
+           db.prepare('UPDATE users SET name = ?, pin = ?, role = ?, salt = ? WHERE id = ?')
+             .run(validated.name, hash, validated.role, salt, validated.id);
+        } else {
+           db.prepare('UPDATE users SET name = ?, role = ? WHERE id = ?')
+             .run(validated.name, validated.role, validated.id);
+        }
+        log.info(`XODIM: ${validated.name} (${validated.role}) ma'lumotlari o'zgartirildi.`);
+      } else {
+        // Yangi user qo'shish
+        const allUsers = db.prepare('SELECT pin, salt FROM users').all();
+        const isDuplicate = allUsers.some(u => {
+            if (!u.salt) return u.pin === validated.pin; // Eski format
+            const { hash } = hashPIN(validated.pin, u.salt);
+            return hash === u.pin;
+        });
+
+        if (isDuplicate) throw new AppError('DB_CONSTRAINT', 'Bu PIN kod allaqachon ishlatilmoqda');
+        
+        const { salt, hash } = hashPIN(validated.pin);
+        db.prepare('INSERT INTO users (name, pin, role, salt) VALUES (?, ?, ?, ?)')
+          .run(validated.name, hash, validated.role, salt);
+        
+        log.info(`XODIM: Yangi xodim qo'shildi: ${validated.name} (${validated.role})`);
       }
-      log.info(`XODIM: ${user.name} (${user.role}) ma'lumotlari o'zgartirildi.`);
-    } else {
-      // Yangi user qo'shish
-      // Unikal PIN tekshiruvi (murakkabroq, chunki endi hashlar har xil)
-      // Lekin biz ism va rol bo'yicha tekshirishimiz mumkin yoki shunchaki PIN to'qnashuviga (collision) ishonamiz (juda kam ehtimol).
-      // Yoki barcha userlarni olib tekshiramiz (kichik baza uchun OK).
-      
-      const allUsers = db.prepare('SELECT pin, salt FROM users').all();
-      const isDuplicate = allUsers.some(u => {
-          const { hash } = hashPIN(user.pin, u.salt);
-          return hash === u.pin;
-      });
-
-      if (isDuplicate) throw new Error('Bu PIN kod band!');
-      
-      const { salt, hash } = hashPIN(user.pin);
-      db.prepare('INSERT INTO users (name, pin, role, salt) VALUES (?, ?, ?, ?)')
-        .run(user.name, hash, user.role, salt);
-      
-      log.info(`XODIM: Yangi xodim qo'shildi: ${user.name} (${user.role})`);
+      notify('users', null);
+    } catch (error) {
+      log.error('saveUser xatosi:', error);
+      throw error;
     }
-    notify('users', null);
   },
 
   deleteUser: (id) => {
-    const user = db.prepare('SELECT * FROM users WHERE id = ?').get(id);
-    if (user && user.role === 'admin') {
-       const adminCount = db.prepare("SELECT count(*) as count FROM users WHERE role = 'admin'").get().count;
-       if (adminCount <= 1) throw new Error("Oxirgi adminni o'chirib bo'lmaydi!");
+    try {
+      if (!id || isNaN(id)) throw new AppError('INVALID_INPUT', 'Noto\'g\'ri ID');
+      
+      const user = db.prepare('SELECT * FROM users WHERE id = ?').get(id);
+      if (!user) throw new AppError('DB_NOT_FOUND', 'Xodim topilmadi');
+      
+      if (user.role === 'admin') {
+         const adminCount = db.prepare("SELECT count(*) as count FROM users WHERE role = 'admin'").get().count;
+         if (adminCount <= 1) throw new AppError('LAST_ADMIN', "Oxirgi adminni o'chirib bo'lmaydi!");
+      }
+      
+      const res = db.prepare('DELETE FROM users WHERE id = ?').run(id);
+      log.warn(`XODIM: Xodim o'chirildi. ID: ${id}, Ism: ${user?.name}`);
+      notify('users', null);
+      return res;
+    } catch (error) {
+      log.error('deleteUser xatosi:', error);
+      throw error;
     }
-    
-    const res = db.prepare('DELETE FROM users WHERE id = ?').run(id);
-    log.warn(`XODIM: Xodim o'chirildi. ID: ${id}, Ism: ${user?.name}`);
-    notify('users', null);
-    return res;
   },
 
   login: (pin) => {
-    // Barcha userlarni olamiz va tekshiramiz (chunki bizda salt userga bog'liq)
-    const users = db.prepare('SELECT * FROM users').all();
-    
-    const foundUser = users.find(u => {
-        // Agar eski formatda (salt yo'q) bo'lsa, to'g'ridan-to'g'ri tekshir (migratsiya tugaguncha ehtiyot shart)
-        if (!u.salt) return u.pin === pin;
-        
-        // Hashlab ko'ramiz
-        const { hash } = hashPIN(pin, u.salt);
-        return hash === u.pin;
-    });
+    try {
+      if (!pin || !/^\d{4,6}$/.test(pin)) {
+        throw new AppError('INVALID_PIN', 'PIN kod 4-6 raqamdan iborat bo\'lishi kerak');
+      }
 
-    if (!foundUser) {
-        log.warn(`LOGIN: Noto'g'ri PIN kod bilan kirishga urinish.`);
-        throw new Error("Noto'g'ri PIN kod");
+      const users = db.prepare('SELECT * FROM users').all();
+      
+      const foundUser = users.find(u => {
+          if (!u.salt) return u.pin === pin; // Eski format (migratsiya uchun)
+          const { hash } = hashPIN(pin, u.salt);
+          return hash === u.pin;
+      });
+
+      if (!foundUser) {
+          log.warn(`LOGIN: Noto'g'ri PIN kod bilan kirishga urinish.`);
+          throw new AppError('INVALID_PIN', "Noto'g'ri PIN kod");
+      }
+      
+      log.info(`LOGIN: ${foundUser.name} (${foundUser.role}) tizimga kirdi.`);
+      return { id: foundUser.id, name: foundUser.name, role: foundUser.role };
+    } catch (error) {
+      log.error('login xatosi:', error);
+      throw error;
     }
-    
-    log.info(`LOGIN: ${foundUser.name} (${foundUser.role}) tizimga kirdi.`);
-    // Clientga PIN va Saltni yubormaymiz
-    return { id: foundUser.id, name: foundUser.name, role: foundUser.role };
   }
 };

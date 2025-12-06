@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useCallback } from 'react';
 import axios from 'axios';
 
 export const useMenu = (apiUrl) => {
@@ -7,8 +7,7 @@ export const useMenu = (apiUrl) => {
   const [activeCategory, setActiveCategory] = useState(null);
   const [loading, setLoading] = useState(false);
 
-  const loadMenu = async () => {
-    // Agar ma'lumot allaqachon bo'lsa, qayta yuklamaymiz
+  const loadMenu = useCallback(async () => {
     if (categories.length > 0) return;
 
     setLoading(true);
@@ -20,9 +19,12 @@ export const useMenu = (apiUrl) => {
       setCategories(catRes.data);
       setProducts(prodRes.data);
       if (catRes.data.length > 0) setActiveCategory(catRes.data[0].id);
-    } catch (err) { console.error(err); }
-    finally { setLoading(false); }
-  };
+    } catch (err) { 
+      console.error('Menyuni yuklashda xato:', err);
+    } finally { 
+      setLoading(false);
+    }
+  }, [apiUrl, categories.length]);
 
   return { categories, products, activeCategory, setActiveCategory, loading, loadMenu };
 };

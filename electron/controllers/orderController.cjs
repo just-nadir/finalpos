@@ -1,5 +1,7 @@
 const { db, notify } = require('../database.cjs');
 const printerService = require('../services/printerService.cjs');
+const { validate, schemas } = require('../utils/validator.cjs');
+const { handleError, AppError } = require('../utils/errorHandler.cjs');
 const log = require('electron-log');
 
 function getOrCreateCheckNumber(tableId) {
@@ -26,11 +28,20 @@ function getDefaultKitchen() {
 }
 
 module.exports = {
-  getTableItems: (id) => db.prepare('SELECT * FROM order_items WHERE table_id = ?').all(id),
+  getTableItems: (id) => {
+    try {
+      if (!id || isNaN(id)) throw new AppError('INVALID_INPUT', 'Noto\'g\'ri stol ID');
+      return db.prepare('SELECT * FROM order_items WHERE table_id = ?').all(id);
+    } catch (error) {
+      throw error;
+    }
+  },
 
   addItem: (data) => {
     try {
+        const validated = validate(schemas.orderItem, data);
         let checkNumber = 0;
+        
         const addItemTransaction = db.transaction((item) => {
            const { tableId, productName, price, quantity, destination } = item;
            checkNumber = getOrCreateCheckNumber(tableId);
@@ -40,7 +51,7 @@ module.exports = {
            const currentTable = db.prepare('SELECT total_amount, waiter_name FROM tables WHERE id = ?').get(tableId);
            const newTotal = (currentTable ? currentTable.total_amount : 0) + (price * quantity);
            
-           let waiterName = currentTable.waiter_name;
+           let waiterName = currentTable?.waiter_name;
            if (!waiterName || waiterName === 'Noma\'lum') {
                waiterName = 'Kassir';
            }
@@ -49,9 +60,9 @@ module.exports = {
              .run(newTotal, new Date().toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'}), waiterName, tableId);
         });
 
-        const res = addItemTransaction(data);
+        const res = addItemTransaction(validated);
         notify('tables', null);
-        notify('table-items', data.tableId);
+        notify('table-items', validated.tableId);
         return res;
     } catch (err) {
         log.error("addItem xatosi:", err);
@@ -61,14 +72,14 @@ module.exports = {
 
   addBulkItems: (tableId, items, waiterId) => {
     try {
+        const validated = validate(schemas.bulkOrder, { tableId, items, waiterId });
+        
         let checkNumber = 0;
         let waiterName = "Noma'lum";
 
         if (waiterId) {
             const user = db.prepare('SELECT name FROM users WHERE id = ?').get(waiterId);
-            if (user) {
-                waiterName = user.name;
-            }
+            if (user) waiterName = user.name;
         }
 
         const addBulkTransaction = db.transaction((itemsList) => {
@@ -76,7 +87,6 @@ module.exports = {
 
            let additionalTotal = 0;
            const insertStmt = db.prepare(`INSERT INTO order_items (table_id, product_name, price, quantity, destination) VALUES (?, ?, ?, ?, ?)`);
-           
            const productStmt = db.prepare('SELECT destination FROM products WHERE name = ?');
            const validatedItems = [];
 
@@ -87,12 +97,11 @@ module.exports = {
                    const product = productStmt.get(item.name);
                    if (product && product.destination) {
                        actualDestination = product.destination;
-                       
                        if (item.destination !== actualDestination) {
                            log.warn(`🔄 Destination o'zgardi: "${item.name}" - Old: ${item.destination} → New: ${actualDestination}`);
                        }
                    } else {
-                       log.warn(`⚠️ Taom bazadan topilmadi yoki destination yo'q: "${item.name}", Default ishlatilmoqda`);
+                       log.warn(`⚠️ Taom bazadan topilmadi: "${item.name}", Default ishlatilmoqda`);
                        actualDestination = getDefaultKitchen();
                    }
                } catch (dbErr) {
@@ -132,7 +141,7 @@ module.exports = {
            return validatedItems;
         });
 
-        const validatedItems = addBulkTransaction(items);
+        const validatedItems = addBulkTransaction(validated.items);
         notify('tables', null);
         notify('table-items', tableId);
 
@@ -140,7 +149,7 @@ module.exports = {
             try {
                 const freshTable = db.prepare('SELECT name, waiter_name FROM tables WHERE id = ?').get(tableId);
                 const tableName = freshTable ? freshTable.name : "Stol";
-                const nameToPrint = (waiterName && waiterName !== "Noma'lum") ? waiterName : (freshTable.waiter_name || "Kassir");
+                const nameToPrint = (waiterName && waiterName !== "Noma'lum") ? waiterName : (freshTable?.waiter_name || "Kassir");
 
                 log.info(`📄 Printer uchun tayyor: ${validatedItems.length} ta taom, Check #${checkNumber}`);
                 await printerService.printKitchenTicket(validatedItems, tableName, checkNumber, nameToPrint);
@@ -159,15 +168,13 @@ module.exports = {
 
   printCheck: async (tableId) => {
     try {
+        if (!tableId || isNaN(tableId)) throw new AppError('INVALID_INPUT', 'Noto\'g\'ri stol ID');
+
         const table = db.prepare('SELECT * FROM tables WHERE id = ?').get(tableId);
-        if (!table) {
-            throw new Error('Stol topilmadi');
-        }
+        if (!table) throw new AppError('DB_NOT_FOUND', 'Stol topilmadi');
 
         const items = db.prepare('SELECT * FROM order_items WHERE table_id = ?').all(tableId);
-        if (items.length === 0) {
-            throw new Error('Buyurtmalar mavjud emas');
-        }
+        if (items.length === 0) throw new AppError('INVALID_INPUT', 'Buyurtmalar mavjud emas');
 
         const checkNumber = getOrCreateCheckNumber(tableId);
 
@@ -215,27 +222,28 @@ module.exports = {
   },
 
   checkout: async (data) => {
-    const { tableId, total, subtotal, discount, paymentMethod, customerId, items, dueDate } = data;
-    const date = new Date().toISOString();
-    
     try {
+        const validated = validate(schemas.checkout, data);
+        const { tableId, total, subtotal, discount, paymentMethod, customerId, items, dueDate } = validated;
+        
+        const date = new Date().toISOString();
         let checkNumber = 0;
         let waiterName = "";
         let guestCount = 0;
 
         const performCheckout = db.transaction(() => {
           const table = db.prepare('SELECT current_check_number, waiter_name, guests FROM tables WHERE id = ?').get(tableId);
-          checkNumber = table ? table.current_check_number : 0;
-          waiterName = table ? table.waiter_name : "Kassir";
-          guestCount = table ? table.guests : 0;
+          if (!table) throw new AppError('DB_NOT_FOUND', 'Stol topilmadi');
+          
+          checkNumber = table.current_check_number;
+          waiterName = table.waiter_name || "Kassir";
+          guestCount = table.guests || 0;
 
           db.prepare(`INSERT INTO sales (date, total_amount, subtotal, discount, payment_method, customer_id, items_json, check_number, waiter_name, guest_count) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(date, total, subtotal, discount, paymentMethod, customerId, JSON.stringify(items), checkNumber, waiterName, guestCount);
           
           if (paymentMethod === 'debt' && customerId) {
              db.prepare('UPDATE customers SET debt = debt + ? WHERE id = ?').run(total, customerId);
              db.prepare('INSERT INTO debt_history (customer_id, amount, type, date, comment) VALUES (?, ?, ?, ?, ?)').run(customerId, total, 'debt', date, `Savdo #${checkNumber} (${waiterName})`);
-             
-             // YANGI: customer_debts jadvaliga qarz yozish
              db.prepare('INSERT INTO customer_debts (customer_id, amount, due_date, is_paid, created_at) VALUES (?, ?, ?, ?, ?)').run(customerId, total, dueDate, 0, date);
           }
 
@@ -251,7 +259,7 @@ module.exports = {
           db.prepare("UPDATE tables SET status = 'free', guests = 0, start_time = NULL, total_amount = 0, current_check_number = 0, waiter_id = 0, waiter_name = NULL WHERE id = ?").run(tableId);
         });
 
-        const res = performCheckout();
+        performCheckout();
         
         notify('tables', null);
         notify('sales', null);
@@ -278,7 +286,8 @@ module.exports = {
                 notify('printer-error', `Kassa printeri: ${err.message}`);
             }
         }, 100);
-        return res;
+        
+        return { success: true, checkNumber };
     } catch (err) {
         log.error("Checkout xatosi:", err);
         throw err;
@@ -299,7 +308,6 @@ module.exports = {
         `;
 
         const sales = db.prepare(query).all(startDate, endDate);
-        
         log.info(`getSales: ${startDate} dan ${endDate} gacha ${sales.length} ta savdo topildi`);
         return sales;
 

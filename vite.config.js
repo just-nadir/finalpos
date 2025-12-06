@@ -1,10 +1,25 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
+import path from 'path'
+import { fileURLToPath } from 'url'
 
-// https://vitejs.dev/config/
+// ES Module uchun __dirname ni olish
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
 export default defineConfig({
   plugins: [react()],
-  base: './', // Electron uchun muhim
+  base: './',
+  resolve: {
+    alias: {
+      '@': path.resolve(__dirname, './src'),
+      '@components': path.resolve(__dirname, './src/components'),
+      '@utils': path.resolve(__dirname, './src/utils'),
+      '@constants': path.resolve(__dirname, './src/constants'),
+      '@hooks': path.resolve(__dirname, './src/hooks'),
+      '@context': path.resolve(__dirname, './src/context'),
+    }
+  },
   server: {
     port: 5173,
     strictPort: true,
@@ -12,14 +27,15 @@ export default defineConfig({
   build: {
     outDir: 'dist',
     emptyOutDir: true,
-    // --- OPTIMIZATSIYA ---
-    chunkSizeWarningLimit: 1000, // 1000kb dan oshsa ogohlantir
+    chunkSizeWarningLimit: 1000,
     rollupOptions: {
       output: {
         manualChunks: {
-          // Katta kutubxonalarni alohida faylga ajratamiz
-          vendor: ['react', 'react-dom', 'react-router-dom', 'lucide-react', 'recharts'],
-          utils: ['axios', 'dayjs', 'socket.io-client']
+          react: ['react', 'react-dom'],
+          router: ['react-router-dom'],
+          icons: ['lucide-react'],
+          charts: ['recharts'],
+          network: ['axios', 'socket.io-client']
         }
       }
     }

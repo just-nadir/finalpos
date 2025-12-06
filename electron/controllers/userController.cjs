@@ -15,7 +15,19 @@ module.exports = {
       return res;
   },
 
-  getDebtors: () => db.prepare('SELECT * FROM customers WHERE debt > 0').all(),
+  getDebtors: () => {
+      const query = `
+          SELECT 
+              c.*,
+              MIN(CASE WHEN cd.is_paid = 0 THEN cd.due_date ELSE NULL END) as next_due_date
+          FROM customers c
+          LEFT JOIN customer_debts cd ON c.id = cd.customer_id
+          WHERE c.debt > 0
+          GROUP BY c.id
+      `;
+      return db.prepare(query).all();
+  },
+  
   getDebtHistory: (id) => db.prepare('SELECT * FROM debt_history WHERE customer_id = ? ORDER BY id DESC').all(id),
   
   payDebt: (customerId, amount, comment) => {

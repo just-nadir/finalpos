@@ -2,23 +2,19 @@ const { db, notify } = require('../database.cjs');
 const printerService = require('../services/printerService.cjs');
 const log = require('electron-log');
 
-// Yordamchi: Check raqamini olish (MUSTAHKAMLANGAN)
 function getOrCreateCheckNumber(tableId) {
     const table = db.prepare('SELECT current_check_number FROM tables WHERE id = ?').get(tableId);
     if (table && table.current_check_number > 0) return table.current_check_number;
 
-    // next_check_number qiymatini olish
     const nextNumObj = db.prepare("SELECT value FROM settings WHERE key = 'next_check_number'").get();
     let nextNum = nextNumObj ? parseInt(nextNumObj.value) : 1;
 
-    // INSERT OR REPLACE yordamida qiymatni kafolatlash va oshirish
     db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES ('next_check_number', ?)").run(String(nextNum + 1));
     db.prepare("UPDATE tables SET current_check_number = ? WHERE id = ?").run(nextNum, tableId);
 
     return nextNum;
 }
 
-// YANGI: Default oshxonani olish
 function getDefaultKitchen() {
     try {
         const firstKitchen = db.prepare('SELECT id FROM kitchens ORDER BY id ASC LIMIT 1').get();
@@ -32,7 +28,6 @@ function getDefaultKitchen() {
 module.exports = {
   getTableItems: (id) => db.prepare('SELECT * FROM order_items WHERE table_id = ?').all(id),
 
-  // 1. Desktopdan qo'shish (Admin/Kassir)
   addItem: (data) => {
     try {
         let checkNumber = 0;
@@ -64,7 +59,6 @@ module.exports = {
     }
   },
 
-  // 2. MOBIL OFITSIANT (SERVER-SIDE VALIDATION QILINDI)
   addBulkItems: (tableId, items, waiterId) => {
     try {
         let checkNumber = 0;
@@ -83,12 +77,10 @@ module.exports = {
            let additionalTotal = 0;
            const insertStmt = db.prepare(`INSERT INTO order_items (table_id, product_name, price, quantity, destination) VALUES (?, ?, ?, ?, ?)`);
            
-           // SERVER-SIDE VALIDATION: Products jadvalidan haqiqiy destination olish
            const productStmt = db.prepare('SELECT destination FROM products WHERE name = ?');
            const validatedItems = [];
 
            for (const item of itemsList) {
-               // Frontenddan kelgan destination ni ishonmaymiz, bazadan tekshiramiz
                let actualDestination = item.destination;
                
                try {
@@ -96,12 +88,10 @@ module.exports = {
                    if (product && product.destination) {
                        actualDestination = product.destination;
                        
-                       // Agar frontend eski ma'lumot yuborgan bo'lsa, logga yozamiz
                        if (item.destination !== actualDestination) {
                            log.warn(`🔄 Destination o'zgardi: "${item.name}" - Old: ${item.destination} → New: ${actualDestination}`);
                        }
                    } else {
-                       // Agar taom bazadan topilmasa yoki destination bo'sh bo'lsa, default
                        log.warn(`⚠️ Taom bazadan topilmadi yoki destination yo'q: "${item.name}", Default ishlatilmoqda`);
                        actualDestination = getDefaultKitchen();
                    }
@@ -110,11 +100,9 @@ module.exports = {
                    actualDestination = getDefaultKitchen();
                }
 
-               // Bazaga eng yangi destination bilan yozamiz
                insertStmt.run(tableId, item.name, item.price, item.qty, actualDestination);
                additionalTotal += (item.price * item.qty);
                
-               // Printerga yuborish uchun validatsiya qilingan itemni saqlaymiz
                validatedItems.push({
                    name: item.name,
                    product_name: item.name,
@@ -141,7 +129,6 @@ module.exports = {
                  .run(newTotal, tableId);
            }
            
-           // Validatsiya qilingan itemlarni qaytaramiz
            return validatedItems;
         });
 
@@ -149,7 +136,6 @@ module.exports = {
         notify('tables', null);
         notify('table-items', tableId);
 
-        // Printerga yuborish (VALIDATSIYA QILINGAN MA'LUMOTLAR BILAN)
         setTimeout(async () => {
             try {
                 const freshTable = db.prepare('SELECT name, waiter_name FROM tables WHERE id = ?').get(tableId);
@@ -171,32 +157,26 @@ module.exports = {
     }
   },
 
-  // 3. YANGI: HISOB CHIQARISH (Pre-check Print)
   printCheck: async (tableId) => {
     try {
-        // Stol ma'lumotlarini olish
         const table = db.prepare('SELECT * FROM tables WHERE id = ?').get(tableId);
         if (!table) {
             throw new Error('Stol topilmadi');
         }
 
-        // Buyurtma itemlarini olish
         const items = db.prepare('SELECT * FROM order_items WHERE table_id = ?').all(tableId);
         if (items.length === 0) {
             throw new Error('Buyurtmalar mavjud emas');
         }
 
-        // Check raqamini olish yoki yaratish
         const checkNumber = getOrCreateCheckNumber(tableId);
 
-        // Sozlamalarni olish (xizmat haqini hisoblash uchun)
         const settingsRows = db.prepare('SELECT * FROM settings').all();
         const settings = settingsRows.reduce((acc, row) => { 
             acc[row.key] = row.value; 
             return acc; 
         }, {});
 
-        // Hisob-kitob
         const subtotal = items.reduce((acc, item) => acc + (item.price * item.quantity), 0);
         const guestsCount = table.guests || 0;
 
@@ -211,7 +191,6 @@ module.exports = {
 
         const total = subtotal + service;
 
-        // Printerga yuborish
         await printerService.printBill({
             checkNumber,
             tableName: table.name,
@@ -222,7 +201,6 @@ module.exports = {
             total
         });
 
-        // Stol statusini 'payment' ga o'zgartirish
         db.prepare("UPDATE tables SET status = 'payment' WHERE id = ?").run(tableId);
         notify('tables', null);
 
@@ -231,15 +209,13 @@ module.exports = {
 
     } catch (err) {
         log.error("printCheck xatosi:", err);
-        // Xatoni frontendga yuborish
         notify('printer-error', `HISOB chiqarishda xato: ${err.message}`);
         throw err;
     }
   },
 
-  // 4. Checkout (To'lov)
   checkout: async (data) => {
-    const { tableId, total, subtotal, discount, paymentMethod, customerId, items } = data;
+    const { tableId, total, subtotal, discount, paymentMethod, customerId, items, dueDate } = data;
     const date = new Date().toISOString();
     
     try {
@@ -258,6 +234,17 @@ module.exports = {
           if (paymentMethod === 'debt' && customerId) {
              db.prepare('UPDATE customers SET debt = debt + ? WHERE id = ?').run(total, customerId);
              db.prepare('INSERT INTO debt_history (customer_id, amount, type, date, comment) VALUES (?, ?, ?, ?, ?)').run(customerId, total, 'debt', date, `Savdo #${checkNumber} (${waiterName})`);
+             
+             // YANGI: customer_debts jadvaliga qarz yozish
+             db.prepare('INSERT INTO customer_debts (customer_id, amount, due_date, is_paid, created_at) VALUES (?, ?, ?, ?, ?)').run(customerId, total, dueDate, 0, date);
+          }
+
+          if (customerId) {
+             const customer = db.prepare('SELECT type, value, balance FROM customers WHERE id = ?').get(customerId);
+             if (customer && customer.type === 'cashback' && customer.value > 0) {
+                const cashbackAmount = (total * customer.value) / 100;
+                db.prepare('UPDATE customers SET balance = balance + ? WHERE id = ?').run(cashbackAmount, customerId);
+             }
           }
           
           db.prepare('DELETE FROM order_items WHERE table_id = ?').run(tableId);
@@ -270,7 +257,6 @@ module.exports = {
         notify('sales', null);
         if(customerId) notify('customers', null);
 
-        // Kassa cheki
         setTimeout(async () => {
             try {
                 const tableName = db.prepare('SELECT name FROM tables WHERE id = ?').get(tableId)?.name || "Stol";
@@ -299,18 +285,12 @@ module.exports = {
     }
   },
   
-  // 5. YANGILANGAN: HISOBOTLAR UCHUN SALES OLISH (LOCAL TIME)
   getSales: (startDate, endDate) => {
     try {
-        // Agar sanalar berilmagan bo'lsa, oxirgi 100 ta savdoni berish
         if (!startDate || !endDate) {
             return db.prepare('SELECT * FROM sales ORDER BY date DESC LIMIT 100').all();
         }
 
-        // MUHIM: SQLite da datetime(date, 'localtime') ishlatib, mahalliy vaqt bo'yicha filtrlash
-        // Frontenddan kelgan sanalar ISO formatida: "2024-12-06T00:00:00.000Z"
-        // Biz bazadagi UTC vaqtni local time ga o'girib, keyin sana oralig'iga tekshiramiz
-        
         const query = `
             SELECT * FROM sales 
             WHERE datetime(date, 'localtime') >= datetime(?) 

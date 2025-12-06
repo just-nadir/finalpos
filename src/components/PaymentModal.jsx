@@ -1,11 +1,12 @@
 import React, { useState } from 'react';
-import { X, Banknote, CreditCard, Smartphone, Check, FileText, AlertCircle } from 'lucide-react';
+import { X, Banknote, CreditCard, Smartphone, Check, FileText, AlertCircle, Calendar } from 'lucide-react';
 
 const PaymentModal = ({ isOpen, onClose, totalAmount, onPay, selectedCustomer }) => {
   if (!isOpen) return null;
 
   const [activeMethod, setActiveMethod] = useState('cash');
   const [error, setError] = useState('');
+  const [dueDate, setDueDate] = useState('');
 
   // To'lov turlari
   const paymentMethods = [
@@ -23,8 +24,14 @@ const PaymentModal = ({ isOpen, onClose, totalAmount, onPay, selectedCustomer })
       return;
     }
 
+    // Agar Nasiya tanlangan bo'lsa va sana tanlanmagan bo'lsa -> Xatolik
+    if (activeMethod === 'debt' && !dueDate) {
+      setError("Qaytarish sanasini tanlashingiz shart!");
+      return;
+    }
+
     if (onPay) {
-        onPay(activeMethod);
+        onPay(activeMethod, dueDate);
     } else {
         onClose();
     }
@@ -66,6 +73,23 @@ const PaymentModal = ({ isOpen, onClose, totalAmount, onPay, selectedCustomer })
               </button>
             ))}
           </div>
+
+          {/* Nasiya uchun sana tanlash */}
+          {activeMethod === 'debt' && (
+            <div className="mb-4">
+              <label className="block text-sm font-bold text-gray-700 mb-2">Qaytarish sanasi</label>
+              <div className="relative">
+                <Calendar className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={20} />
+                <input
+                  type="date"
+                  value={dueDate}
+                  onChange={(e) => setDueDate(e.target.value)}
+                  className="w-full pl-10 pr-4 py-3 rounded-xl border-2 border-gray-200 outline-none focus:border-orange-500 focus:ring-2 focus:ring-orange-100 transition-all text-gray-700 font-medium"
+                  min={new Date().toISOString().split('T')[0]}
+                />
+              </div>
+            </div>
+          )}
 
           {/* Xato xabari */}
           {error && (

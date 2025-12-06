@@ -98,7 +98,7 @@ const OrderSummary = ({ table, onDeselect }) => {
   }
   const finalTotal = preTotal - discountAmount;
 
-  const handlePaymentSuccess = async (method) => {
+  const handlePaymentSuccess = async (method, dueDate) => {
     if (!table || !window.electron) return;
     try {
       const { ipcRenderer } = window.electron;
@@ -110,7 +110,8 @@ const OrderSummary = ({ table, onDeselect }) => {
           discount: discountAmount,
           paymentMethod: method,
           customerId: selectedCustomer ? selectedCustomer.id : null,
-          items: orderItems
+          items: orderItems,
+          dueDate: dueDate || null
       };
 
       await ipcRenderer.invoke('checkout', checkoutData);

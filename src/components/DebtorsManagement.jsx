@@ -73,6 +73,27 @@ const DebtorsManagement = () => {
     } catch (err) { console.error(err); }
   };
 
+  // Sana formatlash va ranglash
+  const formatDueDate = (dueDate) => {
+    if (!dueDate) return null;
+    
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    
+    const due = new Date(dueDate);
+    due.setHours(0, 0, 0, 0);
+    
+    const isOverdue = due < today;
+    
+    const formatted = new Date(dueDate).toLocaleDateString('uz-UZ', {
+      day: '2-digit',
+      month: '2-digit',
+      year: 'numeric'
+    });
+    
+    return { formatted, isOverdue };
+  };
+
   return (
     <div className="flex w-full h-full bg-gray-100 relative">
       {/* Toast Notification */}
@@ -90,28 +111,42 @@ const DebtorsManagement = () => {
         </div>
         
         <div className="flex-1 overflow-y-auto p-3 space-y-2">
-          {debtors.map(debtor => (
-            <button
-              key={debtor.id}
-              onClick={() => setActiveDebtor(debtor)}
-              className={`w-full p-4 rounded-xl text-left transition-all group border-2 
-                ${activeDebtor?.id === debtor.id 
-                  ? 'bg-red-50 border-red-200 shadow-sm' 
-                  : 'bg-white border-transparent hover:bg-gray-50'}`}
-            >
-              <div className="flex justify-between items-start mb-1">
-                <span className={`font-bold ${activeDebtor?.id === debtor.id ? 'text-red-700' : 'text-gray-700'}`}>
-                  {debtor.name}
-                </span>
-              </div>
-              <div className="flex justify-between items-center">
-                <span className="text-xs text-gray-400">{debtor.phone}</span>
-                <span className="text-sm font-bold text-red-500 bg-red-100 px-2 py-0.5 rounded">
-                  {debtor.debt.toLocaleString()}
-                </span>
-              </div>
-            </button>
-          ))}
+          {debtors.map(debtor => {
+            const dueDateInfo = formatDueDate(debtor.next_due_date);
+            
+            return (
+              <button
+                key={debtor.id}
+                onClick={() => setActiveDebtor(debtor)}
+                className={`w-full p-4 rounded-xl text-left transition-all group border-2 
+                  ${activeDebtor?.id === debtor.id 
+                    ? 'bg-red-50 border-red-200 shadow-sm' 
+                    : 'bg-white border-transparent hover:bg-gray-50'}`}
+              >
+                <div className="flex justify-between items-start mb-1">
+                  <span className={`font-bold ${activeDebtor?.id === debtor.id ? 'text-red-700' : 'text-gray-700'}`}>
+                    {debtor.name}
+                  </span>
+                </div>
+                <div className="flex justify-between items-center mb-2">
+                  <span className="text-xs text-gray-400">{debtor.phone}</span>
+                  <span className="text-sm font-bold text-red-500 bg-red-100 px-2 py-0.5 rounded">
+                    {debtor.debt.toLocaleString()}
+                  </span>
+                </div>
+                
+                {/* Muddat */}
+                {dueDateInfo && (
+                  <div className={`flex items-center gap-1 text-xs font-medium mt-1 ${
+                    dueDateInfo.isOverdue ? 'text-red-600' : 'text-blue-600'
+                  }`}>
+                    <Calendar size={12} />
+                    <span>Muddat: {dueDateInfo.formatted}</span>
+                  </div>
+                )}
+              </button>
+            );
+          })}
           
           {debtors.length === 0 && (
             <div className="text-center py-10 text-gray-400 flex flex-col items-center">
